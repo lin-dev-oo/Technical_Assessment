@@ -4,6 +4,10 @@
 
 Create an original, carefully designed application rather than a generic generated dashboard. Use **shadcn/ui** as the component library and **purple as the accent color**. These are implementation requirements.
 
+This is a technical assessment. Keep interface text limited to functional labels, instructions, constraints and feedback; omit promotional copy, taglines and decorative section labels.
+
+When the dataset is empty, show only a centered **Upload CSV** action. Selecting a file starts its upload without a separate import/confirmation button. Show progress and actionable errors when relevant. After a successful upload, show the comments table. When persisted comments already exist, open directly to the table, with an **Upload CSV** button for subsequent uploads. Do not show schema or merge-semantics explanations in this flow.
+
 The user supplied an image solely as an example of visual craftsmanship. It is not a template: do not copy or infer requirements from its layout, presentation, navigation, dialogs, workflow, or features. The app's structure should follow the confirmed comments workflow. No pixel matching is required.
 
 ## Design approach

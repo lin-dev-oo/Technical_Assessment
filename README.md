@@ -37,3 +37,7 @@ In your submission, must include the following:
 
 - You will be expected to run and demo your application running the docker compose file during the interview.
 - During the demo, two browser tabs/windows should be opened and you will be required to perform the conflicting uploads simultaneously. You must explain every design decision in their conflict resolution strategy.
+
+## Application setup and implementation
+
+The original assessment above is preserved. See [setup, tests, architecture and demo instructions](docs/setup.md) for the implementation. Confirmed scope and terminology are in [the specification](docs/spec.md) and [the glossary](GLOSSARY.md).
