@@ -9,6 +9,57 @@ if (!databaseUrl) throw new Error('Set TEST_DATABASE_URL to a dedicated PostgreS
 if (!new URL(databaseUrl).pathname.endsWith('_test')) throw new Error('TEST_DATABASE_URL database name must end in _test; tests reset its public schema.');
 const header = 'postId,id,name,email,body\n';
 
+test('serializes two saves from one accepted version and returns the current accepted data to the stale writer', () => withApi(async ({ upload, request, list, pool }) => {
+  await upload('seed', header + '1,1,A,a@example.com,Original');
+  const edit = { expectedVersion: 1, postId: 2, name: 'Edited', email: 'edit@example.com', body: 'First draft' };
+  const responses = await together(pool,
+    () => request('/api/comments/1/edit', edit),
+    () => request('/api/comments/1/edit', { ...edit, body: 'Second draft' }));
+  assert.deepEqual(responses.map(response => response.status).sort(), [200, 409]);
+  const saved = await responses.find(response => response.status === 200)!.json();
+  const stale = await responses.find(response => response.status === 409)!.json();
+  assert.equal(saved.status, 'saved');
+  assert.equal(saved.review.accepted.version, 2);
+  assert.equal(stale.status, 'stale_edit');
+  assert.deepEqual(stale.review, saved.review);
+  assert.equal((await list()).comments[0].body, saved.review.accepted.body);
+  assert.deepEqual(saved.review.alternatives, []);
+}));
+
+test('rejects invalid edits and identifier changes without changing accepted values', () => withApi(async ({ upload, request, list }) => {
+  await upload('seed', header + '1,1,A,a@example.com,Original');
+  const valid = { expectedVersion: 1, postId: 2, name: 'Edited', email: 'edit@example.com', body: 'Draft' };
+  for (const change of [{ postId: 0 }, { postId: '2' }, { postId: 2147483648 }, { name: ' ' }, { email: 'bad' }, { body: '' }, { body: 'Null\u0000text' }, { id: 2 }]) {
+    const response = await request('/api/comments/1/edit', { ...valid, ...change });
+    assert.equal(response.status, 422);
+    assert.equal((await response.json()).status, 'rejected');
+  }
+  assert.equal((await list()).comments[0].body, 'Original');
+  const response = await request('/api/comments/1/edit', { ...valid, body: '  A quoted, multiline\nbody  ' });
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).review.accepted.body, '  A quoted, multiline\nbody  ');
+}));
+
+test('blocks drafts after a pending conflict arrives until resolution and a deliberate current-version save', () => withApi(async ({ upload, request, list }) => {
+  await upload('seed', header + '1,1,A,a@example.com,Original');
+  const draft = { expectedVersion: 1, postId: 2, name: 'Edited', email: 'edit@example.com', body: 'Draft' };
+  await upload('pending', header + '3,1,Alternative,other@example.com,Other body');
+  const blocked = await request('/api/comments/1/edit', draft);
+  assert.equal(blocked.status, 409);
+  const result = await blocked.json();
+  assert.equal(result.status, 'conflicted_edit');
+  assert.equal(result.review.accepted.body, 'Original');
+  assert.equal(result.review.alternatives.length, 1);
+  assert.equal((await list()).comments[0].body, 'Original');
+  await request('/api/comments/1/resolve', { expectedVersion: 1, expectedProposalRevision: result.review.proposalRevision, selected: result.review.alternatives[0].alternativeId });
+  const stale = await request('/api/comments/1/edit', draft);
+  assert.equal(stale.status, 409);
+  assert.equal((await stale.json()).status, 'stale_edit');
+  const saved = await request('/api/comments/1/edit', { ...draft, expectedVersion: 2 });
+  assert.equal(saved.status, 200);
+  assert.equal((await list()).comments[0].body, 'Draft');
+}));
+
 test('searches the complete accepted dataset with literal case-insensitive text and exact numeric IDs', () => withApi(async ({ upload, list }) => {
   const rows = Array.from({ length: 31 }, (_, i) => `7,${i + 1},Ordinary,user${i + 1}@example.com,Body`);
   rows.push('42,142,MiXeD title,special@example.com,Literal 100%_match');

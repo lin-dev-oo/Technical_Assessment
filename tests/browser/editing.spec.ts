@@ -1,0 +1,127 @@
+import { test, expect } from '@playwright/test';
+import { Pool } from 'pg';
+const header = 'postId,id,name,email,body\n';
+
+test.beforeEach(async ({ request }) => {
+  const pool = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
+  try { await pool.query('TRUNCATE alternatives, comments, upload_requests'); } finally { await pool.end(); }
+  await request.post('/api/uploads', { headers: { 'x-upload-id': 'seed' }, data: header + '1,1,Accepted name,accepted@example.com,Accepted body' });
+});
+
+test('edits non-identifier fields with explicit Save and Cancel', async ({ page, request }, testInfo) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Edit comment 1', exact: true }).click();
+  const form = page.getByRole('form', { name: 'Edit comment 1', exact: true });
+  await expect(page.getByLabel('ID', { exact: true })).toHaveCount(0);
+  await expect(page.getByRole('row', { name: 'Editing comment 1', exact: true }).getByLabel('Name', { exact: true })).toBeVisible();
+  await page.getByLabel('Name', { exact: true }).fill('My unsaved name');
+  await form.getByRole('button', { name: 'Cancel', exact: true }).click();
+  expect((await (await request.get('/api/comments')).json()).comments[0].name).toBe('Accepted name');
+  await page.getByRole('button', { name: 'Edit comment 1', exact: true }).click();
+  await expect(page.getByLabel('Name', { exact: true })).toHaveValue('Accepted name');
+  await page.getByLabel('Post ID', { exact: true }).fill('2');
+  await page.getByLabel('Name', { exact: true }).fill('Saved name');
+  await page.getByLabel('Email', { exact: true }).fill('saved@example.com');
+  await page.getByLabel('Body', { exact: true }).fill('Saved body\nAnother line');
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.screenshot({ path: testInfo.outputPath('edit-desktop.png'), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.screenshot({ path: testInfo.outputPath('edit-mobile.png'), fullPage: true });
+  await form.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(form).toHaveCount(0);
+  await expect(page.getByText('Saved name', { exact: true })).toBeVisible();
+  await page.reload();
+  await expect(page.getByText('Saved name', { exact: true })).toBeVisible();
+});
+
+test('preserves a stale draft across refresh and search and requires a deliberate baseline before retrying', async ({ page, browser }, testInfo) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Edit comment 1', exact: true }).click();
+  const form = page.getByRole('form', { name: 'Edit comment 1', exact: true });
+  await page.getByLabel('Body', { exact: true }).fill('My preserved draft\n' + 'LongDraft'.repeat(70));
+  const other = await browser.newPage();
+  await other.goto('/');
+  await other.getByRole('button', { name: 'Edit comment 1', exact: true }).click();
+  await other.getByLabel('Body', { exact: true }).fill('Other accepted body');
+  await other.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(other.getByRole('form')).toHaveCount(0);
+  await form.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('This comment changed.');
+  await expect(page.getByRole('region', { name: 'Current accepted version' })).toContainText('Other accepted body');
+  await expect(form.getByRole('button', { name: 'Save', exact: true })).toBeDisabled();
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.screenshot({ path: testInfo.outputPath('stale-edit-desktop.png'), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.screenshot({ path: testInfo.outputPath('stale-edit-mobile.png'), fullPage: true });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
+  await page.getByRole('button', { name: 'Use current accepted version' }).click();
+  await expect(form.getByRole('button', { name: 'Save', exact: true })).toBeEnabled();
+  await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+  await page.getByRole('searchbox').fill('no-match');
+  await expect(page.getByText('No comments found', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('Body', { exact: true })).toHaveValue('My preserved draft\n' + 'LongDraft'.repeat(70));
+  await expect(form.getByRole('button', { name: 'Save', exact: true })).toBeEnabled();
+  await form.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(form).toHaveCount(0);
+  await page.getByRole('button', { name: 'Clear search', exact: true }).click();
+  await expect(page.getByText('My preserved draft', { exact: false })).toBeVisible();
+  await other.close();
+});
+
+test('preserves a failed draft and blocks it until an incoming conflict is resolved', async ({ page, request }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Edit comment 1', exact: true }).click();
+  const form = page.getByRole('form', { name: 'Edit comment 1', exact: true });
+  await page.getByLabel('Body', { exact: true }).fill('Draft survives errors');
+  await page.getByLabel('Email', { exact: true }).fill('invalid');
+  await form.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('email: Use a valid email address.');
+  await expect(page.getByLabel('Body', { exact: true })).toHaveValue('Draft survives errors');
+  await page.getByLabel('Email', { exact: true }).fill('accepted@example.com');
+  await page.route('**/api/comments/1/edit', route => route.abort());
+  await form.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('Save not confirmed.');
+  await expect(page.getByLabel('Body', { exact: true })).toHaveValue('Draft survives errors');
+  await page.unroute('**/api/comments/1/edit');
+  await request.post('/api/uploads', { headers: { 'x-upload-id': 'pending' }, data: header + '2,1,Alternative,other@example.com,Other body' });
+  await form.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('A pending conflict arrived.');
+  await expect(page.getByLabel('Body', { exact: true })).toHaveValue('Draft survives errors');
+  await expect(form.getByRole('button', { name: 'Save', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: 'Use current accepted version' }).click();
+  await expect(page.getByRole('alert')).toContainText('Resolve the pending conflict');
+  await page.getByRole('button', { name: 'Review pending conflict' }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByRole('radio', { name: 'Pending alternative 1' }).check();
+  await dialog.getByRole('button', { name: 'Resolve conflict', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(form.getByRole('button', { name: 'Save', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: 'Use current accepted version' }).click();
+  await expect(page.getByLabel('Body', { exact: true })).toHaveValue('Draft survives errors');
+  await form.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(form).toHaveCount(0);
+  await expect(page.getByText('Draft survives errors', { exact: true })).toBeVisible();
+  await request.post('/api/uploads', { headers: { 'x-upload-id': 'later-pending' }, data: header + '3,1,Later,later@example.com,Later body' });
+  await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Edit comment 1', exact: true })).toBeDisabled();
+});
+
+test('requires deliberate baseline refresh after a conflict is resolved keeping accepted values', async ({ page, request }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Edit comment 1', exact: true }).click();
+  const form = page.getByRole('form', { name: 'Edit comment 1', exact: true });
+  await page.getByLabel('Body', { exact: true }).fill('Kept draft');
+  await request.post('/api/uploads', { headers: { 'x-upload-id': 'conflict' }, data: header + '2,1,Alternative,other@example.com,Other body' });
+  await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+  await expect(form.getByRole('button', { name: 'Save', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: 'Review pending conflict' }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByRole('radio', { name: 'Accepted version' }).check();
+  await dialog.getByRole('button', { name: 'Resolve conflict', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Review conflict for comment 1' })).toHaveCount(0);
+  await expect(form.getByRole('button', { name: 'Save', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: 'Use current accepted version' }).click();
+  await expect(form.getByRole('button', { name: 'Save', exact: true })).toBeEnabled();
+  await expect(page.getByLabel('Body', { exact: true })).toHaveValue('Kept draft');
+});

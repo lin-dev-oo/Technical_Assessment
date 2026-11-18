@@ -6,6 +6,22 @@ export type ParsedUpload = { ok: true; comments: CommentValues[] } | { ok: false
 export const MAX_BYTES = 5 * 1024 * 1024;
 const fields = ['postId', 'id', 'name', 'email', 'body'] as const;
 
+// Both CSV imports and manual edits preserve text and apply the same field rules.
+export function validateFields(value: Record<string, unknown>): ValidationError[] {
+  const errors: ValidationError[] = [];
+  for (const field of fields) {
+    const entry = value[field];
+    if (field === 'id' || field === 'postId') {
+      const number = Number(entry);
+      if (!((typeof entry === 'string' && /^\d+$/.test(entry)) || typeof entry === 'number') || !Number.isInteger(number) || number < 1 || number > 2147483647)
+        errors.push({ field, message: 'Use a positive whole number from 1 to 2147483647.' });
+    } else if (typeof entry !== 'string' || !entry.trim()) errors.push({ field, message: 'A nonblank value is required.' });
+    else if (field === 'email' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(entry)) errors.push({ field, message: 'Use a valid email address.' });
+    if (typeof entry === 'string' && entry.includes('\u0000')) errors.push({ field, message: 'Null characters are not supported. Remove the null character.' });
+  }
+  return errors;
+}
+
 export function parseUpload(content: Buffer): ParsedUpload {
   if (content.length > MAX_BYTES) return { ok: false, errors: [{ message: 'The file exceeds the 5 MB upload limit.' }] };
   let text: string;
@@ -40,17 +56,12 @@ export function parseUpload(content: Buffer): ParsedUpload {
     const record = index + 2;
     if (row.length !== fields.length) { errors.push({ record, message: `Expected 5 fields; received ${row.length}.` }); return; }
     const value = Object.fromEntries(fields.map(field => [field, row[headers.indexOf(field.toLowerCase())]]));
-    for (const field of fields) {
-      if (field === 'id' || field === 'postId') {
-        const number = Number(value[field]);
-        if (!/^\d+$/.test(value[field]) || !Number.isInteger(number) || number < 1 || number > 2147483647) errors.push({ record, field, message: 'Use a positive whole number from 1 to 2147483647.' });
-        else if (field === 'id') {
-          if (seen.has(number)) errors.push({ record, field, message: `ID ${number} appears more than once in this file.` });
-          seen.add(number);
-        }
-      } else if (!value[field].trim()) errors.push({ record, field, message: 'A nonblank value is required.' });
-      else if (field === 'email' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value[field])) errors.push({ record, field, message: 'Use a valid email address.' });
-      if (typeof value[field] === 'string' && value[field].includes('\u0000')) errors.push({ record, field, message: 'Null characters are not supported. Remove the null character.' });
+    const fieldErrors = validateFields(value);
+    errors.push(...fieldErrors.map(error => ({ ...error, record })));
+    if (!fieldErrors.some(error => error.field === 'id')) {
+      const id = Number(value.id);
+      if (seen.has(id)) errors.push({ record, field: 'id', message: `ID ${id} appears more than once in this file.` });
+      seen.add(id);
     }
     comments.push({ id: Number(value.id), postId: Number(value.postId), name: value.name, email: value.email, body: value.body });
   });

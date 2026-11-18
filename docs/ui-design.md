@@ -23,7 +23,7 @@ The user supplied an image solely as an example of visual craftsmanship. It is n
 
 - Upload: clearly distinguish transferring, processing, rejection, and completion. Show actionable validation errors and honest counts; an invalid file must not look partially imported.
 - Table: keep identifiers, pending-conflict status, edit actions, search, and pagination readable. Handle long names, emails, and multiline bodies without breaking alignment or hiding access to the full content.
-- Editing: make Save/Cancel and unsaved state clear. Preserve drafts and focus during background refreshes; explain stale-save errors without repeated interruptions.
+- Editing: edit values directly in the table cells, with Save/Cancel on the edited row rather than a separate editor box. Make the unsaved state clear. Preserve drafts and focus during background refreshes; explain stale-save errors without repeated interruptions.
 - Conflict review: give the accepted version and alternatives clear labels, align comparable fields, highlight actual differences, and make the selected whole version unambiguous. Support several alternatives and long text without making comparison unusable.
 - Presence: use subtle cell indicators with session labels. Presence styling must remain distinguishable from conflict warnings, keyboard focus, and selection, and must not obstruct editing.
 - Empty, loading, error, disconnected, stale-review, and successful states must receive the same design attention as the populated happy path.

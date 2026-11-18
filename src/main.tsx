@@ -4,7 +4,8 @@ import { Check, ChevronDown, ChevronLeft, ChevronRight, FileUp, RefreshCw, Searc
 import { Button } from './components/ui/button';
 import { Progress } from './components/ui/progress';
 import { Input } from './components/ui/input';
-import { useComments } from './hooks/use-comments';
+import { useComments, type Comment } from './hooks/use-comments';
+import { CommentEditor } from './components/comment-editor';
 import { ConflictReview } from './components/conflict-review';
 import './styles.css';
 
@@ -20,6 +21,7 @@ function App() {
   const [outcome, setOutcome] = useState<Outcome>();
   const { query, setQuery, page, setPage, pageSize, setPageSize, data, loading, loadError, hasComments, refresh } = useComments();
   const [reviewId, setReviewId] = useState<number>();
+  const [editing, setEditing] = useState<Comment>();
   const [resolved, setResolved] = useState(false);
   const [sessionLabel] = useState(() => {
     const existing = sessionStorage.getItem('comments-session-label');
@@ -54,6 +56,8 @@ function App() {
     xhr.ontimeout = () => setStage('network-error'); xhr.timeout = 120000;
     xhr.send(selected);
   }
+  const visibleComments = data?.comments ?? [];
+  const displayedComments = editing && !visibleComments.some(comment => comment.id === editing.id) ? [editing, ...visibleComments] : visibleComments;
   const pages = Math.max(1, Math.ceil((data?.total ?? 0) / pageSize));
   const uploadFeedback = <>
     {busy && <div className="upload-status" role="status"><div><strong>{stage === 'transferring' ? 'Uploading CSV' : 'Processing CSV'}</strong><span>{stage === 'transferring' ? `${progress}%` : 'Validating and saving…'}</span></div><Progress value={progress} aria-label="File transfer"/></div>}
@@ -71,7 +75,7 @@ function App() {
         <span className="search-status" role="status">{loading ? 'Searching…' : query ? `${data?.total ?? 0} ${data?.total === 1 ? 'result' : 'results'}` : ''}</span>
       </div>
       <div className="table-feedback">{uploadFeedback}{resolved && <div className="feedback success" role="status"><Check size={18}/><span>Conflict resolved.</span></div>}{loadError && <div className="feedback error" role="alert"><TriangleAlert size={18}/><span>Could not refresh comments. Try again.</span></div>}</div>
-          <div className="table-scroll" tabIndex={0} role="region" aria-label="Accepted comments table" aria-busy={loading}><table><thead><tr><th scope="col">ID</th><th scope="col">POST</th><th scope="col">NAME & EMAIL</th><th scope="col">COMMENT</th><th scope="col"><span className="sr-only">Read full comment</span></th></tr></thead><tbody>{data?.comments.map(comment => <React.Fragment key={comment.id}><tr><td className="identifier">#{comment.id}{comment.pendingCount > 0 && <Button variant="outline" size="sm" className="conflict-button" aria-label={`Review conflict for comment ${comment.id}`} onClick={() => { setResolved(false); setReviewId(comment.id); }}><TriangleAlert size={12}/>{comment.pendingCount} pending</Button>}</td><td className="post-id">{comment.postId}</td><td><div className="person-name">{comment.name}</div><div className="email">{comment.email}</div></td><td><p className="body-preview">{comment.body}</p></td><td><Button variant="ghost" size="icon" aria-label={`${expanded === comment.id ? 'Close' : 'Read'} comment ${comment.id}`} aria-expanded={expanded === comment.id} onClick={() => setExpanded(expanded === comment.id ? undefined : comment.id)}>{expanded === comment.id ? <X size={16}/> : <ChevronDown size={16}/>}</Button></td></tr>{expanded === comment.id && <tr className="expanded-row"><td colSpan={5}><div className="expanded-content"><span className="section-number">COMMENT #{comment.id}</span><h3>{comment.name}</h3><p className="expanded-email">{comment.email}</p><p className="full-body">{comment.body}</p></div></td></tr>}</React.Fragment>)}</tbody></table></div>
+          <div className="table-scroll" tabIndex={0} role="region" aria-label="Accepted comments table" aria-busy={loading}><table><thead><tr><th scope="col">ID</th><th scope="col">POST</th><th scope="col">NAME & EMAIL</th><th scope="col">COMMENT</th><th scope="col"><span className="sr-only">Read full comment</span></th></tr></thead><tbody>{displayedComments.map(comment => <React.Fragment key={comment.id}>{editing?.id === comment.id ? <CommentEditor initial={editing} current={visibleComments.find(row => row.id === editing.id)} retained={!visibleComments.some(row => row.id === editing.id)} sessionLabel={sessionLabel} onCancel={() => setEditing(undefined)} onSaved={() => { setEditing(undefined); refresh(); }} onReview={() => setReviewId(editing.id)}/> : <tr><td className="identifier">#{comment.id}{comment.pendingCount > 0 && <Button variant="outline" size="sm" className="conflict-button" aria-label={`Review conflict for comment ${comment.id}`} onClick={() => { setResolved(false); setReviewId(comment.id); }}><TriangleAlert size={12}/>{comment.pendingCount} pending</Button>}</td><td className="post-id">{comment.postId}</td><td><div className="person-name">{comment.name}</div><div className="email">{comment.email}</div></td><td><p className="body-preview">{comment.body}</p></td><td><Button variant="ghost" size="sm" disabled={comment.pendingCount > 0 || Boolean(editing)} aria-label={`Edit comment ${comment.id}`} onClick={() => setEditing(comment)}>Edit</Button><Button variant="ghost" size="icon" aria-label={`${expanded === comment.id ? 'Close' : 'Read'} comment ${comment.id}`} aria-expanded={expanded === comment.id} onClick={() => setExpanded(expanded === comment.id ? undefined : comment.id)}>{expanded === comment.id ? <X size={16}/> : <ChevronDown size={16}/>}</Button></td></tr>}{editing?.id !== comment.id && expanded === comment.id && <tr className="expanded-row"><td colSpan={5}><div className="expanded-content"><span className="section-number">COMMENT #{comment.id}</span><h3>{comment.name}</h3><p className="expanded-email">{comment.email}</p><p className="full-body">{comment.body}</p></div></td></tr>}</React.Fragment>)}</tbody></table></div>
           {data?.total === 0 && !loading && <div className="empty-results"><strong>No comments found</strong><p>Try another search or clear the search.</p></div>}
           <div className="pagination"><span>{data && `${data.total === 0 ? 0 : (data.page - 1) * data.pageSize + 1}–${Math.min(data.page * data.pageSize, data.total)} of ${data.total.toLocaleString()} comments`}</span><div className="page-controls"><label htmlFor="page-size">Rows per page</label><select id="page-size" value={pageSize} onChange={event => { setPageSize(Number(event.target.value)); }}>{[10, 25, 50].map(size => <option key={size}>{size}</option>)}</select><span className="page-label">{page} / {pages}</span><Button variant="outline" size="icon" aria-label="Previous page" disabled={page <= 1 || loading} onClick={() => setPage(page - 1)}><ChevronLeft size={16}/></Button><Button variant="outline" size="icon" aria-label="Next page" disabled={page >= pages || loading} onClick={() => setPage(page + 1)}><ChevronRight size={16}/></Button></div></div>
     </section> : <div className="upload-entry">

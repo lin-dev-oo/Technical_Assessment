@@ -2,7 +2,7 @@ import express from 'express';
 import type { Pool, PoolClient } from 'pg';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { MAX_BYTES, parseUpload } from './csv.js';
+import { MAX_BYTES, parseUpload, validateFields } from './csv.js';
 
 async function readReview(client: PoolClient, id: number) {
   const { rows: [accepted] } = await client.query(`SELECT id, "postId", name, email, body, version,
@@ -137,6 +137,33 @@ export async function createApp(pool: Pool) {
       await client.query('COMMIT');
       if (!review) res.status(404).json({ status: 'not_found', message: 'Comment not found.' });
       else res.json(review);
+    } catch (error) { await client.query('ROLLBACK'); throw error; }
+    finally { client.release(); }
+  });
+  app.post('/api/comments/:id/edit', express.json({ limit: '5mb' }), async (req, res) => {
+    const id = commentId(req.params.id);
+    const { expectedVersion, postId, name, email, body } = req.body ?? {};
+    if (!id || !Number.isSafeInteger(expectedVersion) || expectedVersion < 1) {
+      res.status(400).json({ status: 'invalid_request', message: 'Supply a comment ID and its accepted version.' }); return;
+    }
+    const errors = validateFields({ id, postId, name, email, body });
+    if (typeof postId !== 'number' && !errors.some(error => error.field === 'postId')) errors.push({ field: 'postId', message: 'Use a positive whole number.' });
+    if (Object.hasOwn(req.body, 'id')) errors.push({ field: 'id', message: 'Comment IDs cannot be changed.' });
+    if (errors.length) { res.status(422).json({ status: 'rejected', errors }); return; }
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('SELECT pg_advisory_xact_lock(71422301)');
+      const review = await readReview(client, id);
+      if (!review) { await client.query('COMMIT'); res.status(404).json({ status: 'not_found', message: 'Comment not found.' }); return; }
+      if (review.alternatives.length || review.accepted.version !== expectedVersion) {
+        await client.query('COMMIT'); res.status(409).json({ status: review.alternatives.length ? 'conflicted_edit' : 'stale_edit', review }); return;
+      }
+      await client.query(`UPDATE comments SET "postId"=$2, name=$3, email=$4, body=$5, version=version+1,
+        upload_label='Manual edit', session_label=$6 WHERE id=$1`, [id, postId, name, email, body, (req.get('x-session-label') || 'Browser session').slice(0, 80)]);
+      const saved = await readReview(client, id);
+      await client.query('COMMIT');
+      res.json({ status: 'saved', review: saved });
     } catch (error) { await client.query('ROLLBACK'); throw error; }
     finally { client.release(); }
   });
