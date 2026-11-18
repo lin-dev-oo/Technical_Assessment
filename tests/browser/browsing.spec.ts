@@ -3,7 +3,7 @@ import { Pool } from 'pg';
 
 test.beforeEach(async ({ request }) => {
   const pool = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
-  try { await pool.query('TRUNCATE comments, upload_requests'); } finally { await pool.end(); }
+  try { await pool.query('TRUNCATE alternatives, comments, upload_requests'); } finally { await pool.end(); }
   const rows = Array.from({ length: 61 }, (_, i) => `1,${i + 1},${i >= 50 ? 'Needle' : 'Comment'} ${i + 1},user${i + 1}@example.com,Body`).join('\n');
   expect((await request.post('/api/uploads', { headers: { 'x-upload-id': 'browser-seed' }, data: `postId,id,name,email,body\n${rows}` })).ok()).toBeTruthy();
 });

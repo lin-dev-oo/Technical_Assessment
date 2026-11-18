@@ -1,8 +1,31 @@
 import express from 'express';
-import type { Pool } from 'pg';
+import type { Pool, PoolClient } from 'pg';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { MAX_BYTES, parseUpload } from './csv.js';
+
+async function readReview(client: PoolClient, id: number) {
+  const { rows: [accepted] } = await client.query(`SELECT id, "postId", name, email, body, version,
+    proposal_revision AS "proposalRevision", upload_label AS "uploadLabel", session_label AS "sessionLabel"
+    FROM comments WHERE id=$1`, [id]);
+  if (!accepted) return null;
+  const { rows: alternatives } = await client.query(`SELECT alternative_id AS "alternativeId", comment_id AS id,
+    "postId", name, email, body, upload_label AS "uploadLabel", session_label AS "sessionLabel"
+    FROM alternatives WHERE comment_id=$1 ORDER BY alternative_id`, [id]);
+  return { accepted, alternatives, proposalRevision: accepted.proposalRevision };
+}
+
+function commentId(value: string) {
+  const id = Number(value);
+  return /^\d+$/.test(value) && Number.isInteger(id) && id > 0 && id <= 2147483647 ? id : null;
+}
+
+function uploadLabel(value: string | undefined) {
+  if (!value) return 'CSV upload';
+  // The browser encodes filenames because HTTP header values cannot carry arbitrary Unicode.
+  try { return decodeURIComponent(value).slice(0, 160); }
+  catch { return value.slice(0, 160); }
+}
 
 export async function createApp(pool: Pool) {
   await pool.query(`CREATE TABLE IF NOT EXISTS comments (
@@ -14,6 +37,15 @@ export async function createApp(pool: Pool) {
     id text PRIMARY KEY, digest text NOT NULL, http_status integer NOT NULL,
     outcome json NOT NULL, created_at timestamptz NOT NULL DEFAULT now()
   )`);
+  await pool.query(`ALTER TABLE comments ADD COLUMN IF NOT EXISTS proposal_revision integer NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS upload_label text NOT NULL DEFAULT 'Earlier upload',
+    ADD COLUMN IF NOT EXISTS session_label text NOT NULL DEFAULT 'Unknown session'`);
+  await pool.query(`CREATE TABLE IF NOT EXISTS alternatives (
+    alternative_id serial PRIMARY KEY, comment_id integer NOT NULL REFERENCES comments(id),
+    "postId" integer NOT NULL, name text NOT NULL, email text NOT NULL, body text NOT NULL,
+    upload_label text NOT NULL, session_label text NOT NULL
+  )`);
+  await pool.query('CREATE INDEX IF NOT EXISTS alternatives_comment_id ON alternatives(comment_id)');
   const app = express();
   app.get('/api/health', async (_req, res) => { await pool.query('SELECT 1'); res.json({ status: 'ok' }); });
   app.get('/api/sample', (_req, res) => res.download(path.resolve('data.csv')));
@@ -33,7 +65,7 @@ export async function createApp(pool: Pool) {
       await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
       const { rows: [{ total }] } = await client.query(`SELECT count(*)::integer AS total FROM comments ${filter}`, [query, numericId]);
       const page = Math.min(requestedPage, Math.max(1, Math.ceil(total / pageSize)));
-      const { rows: comments } = await client.query(`SELECT id, "postId", name, email, body, version FROM comments ${filter} ORDER BY id LIMIT $3 OFFSET $4`, [query, numericId, pageSize, (page - 1) * pageSize]);
+      const { rows: comments } = await client.query(`SELECT id, "postId", name, email, body, version, (SELECT count(*)::integer FROM alternatives WHERE comment_id = comments.id) AS "pendingCount" FROM comments ${filter} ORDER BY id LIMIT $3 OFFSET $4`, [query, numericId, pageSize, (page - 1) * pageSize]);
       await client.query('COMMIT');
       res.json({ comments, total, page, pageSize });
     } catch (error) { await client.query('ROLLBACK'); throw error; }
@@ -78,15 +110,63 @@ export async function createApp(pool: Pool) {
         const current = accepted.get(comment.id);
         return current && (current.postId !== comment.postId || current.name !== comment.name || current.email !== comment.email || current.body !== comment.body);
       });
-      if (changed.length) {
-        await finish(409, { status: 'unsupported_conflict', message: 'This file changes existing comments. Conflict review is not available yet. No comments were changed. Keep the accepted values or remove these IDs and try a new file.', errors: changed.map(comment => ({ field: 'id', message: `Comment ${comment.id} differs from its accepted version.` })) });
-        return;
+      const fileLabel = uploadLabel(req.get('x-upload-label'));
+      const sessionLabel = (req.get('x-session-label') || 'Browser session').slice(0, 80);
+      for (const comment of changed) {
+        const values = [comment.id, comment.postId, comment.name, comment.email, comment.body];
+        const duplicate = await client.query(`SELECT 1 FROM alternatives WHERE comment_id=$1 AND "postId"=$2 AND name=$3 AND email=$4 AND body=$5`, values);
+        if (duplicate.rowCount) continue;
+        await client.query(`INSERT INTO alternatives (comment_id, "postId", name, email, body, upload_label, session_label) VALUES ($1,$2,$3,$4,$5,$6,$7)`, [...values, fileLabel, sessionLabel]);
+        await client.query('UPDATE comments SET proposal_revision=proposal_revision+1 WHERE id=$1', [comment.id]);
       }
       const incoming = parsed.comments.filter(comment => !accepted.has(comment.id));
-      await client.query(`INSERT INTO comments (id, "postId", name, email, body)
-        SELECT id, "postId", name, email, body FROM json_to_recordset($1::json)
-        AS incoming(id integer, "postId" integer, name text, email text, body text)`, [JSON.stringify(incoming)]);
-      await finish(200, { status: 'completed', inserted: incoming.length, unchanged: parsed.comments.length - incoming.length });
+      await client.query(`INSERT INTO comments (id, "postId", name, email, body, upload_label, session_label)
+        SELECT id, "postId", name, email, body, $2, $3 FROM json_to_recordset($1::json)
+        AS incoming(id integer, "postId" integer, name text, email text, body text)`, [JSON.stringify(incoming), fileLabel, sessionLabel]);
+      await finish(200, { status: 'completed', inserted: incoming.length, unchanged: parsed.comments.length - incoming.length - changed.length, conflicts: changed.length });
+    } catch (error) { await client.query('ROLLBACK'); throw error; }
+    finally { client.release(); }
+  });
+  app.get('/api/comments/:id/review', async (req, res) => {
+    const id = commentId(req.params.id);
+    if (!id) { res.status(400).json({ status: 'invalid_request', message: 'Supply a valid comment ID.' }); return; }
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
+      const review = await readReview(client, id);
+      await client.query('COMMIT');
+      if (!review) res.status(404).json({ status: 'not_found', message: 'Comment not found.' });
+      else res.json(review);
+    } catch (error) { await client.query('ROLLBACK'); throw error; }
+    finally { client.release(); }
+  });
+  app.post('/api/comments/:id/resolve', express.json({ limit: '4kb' }), async (req, res) => {
+    const id = commentId(req.params.id);
+    const { expectedVersion, expectedProposalRevision, selected } = req.body ?? {};
+    if (!id || !Number.isSafeInteger(expectedVersion) || expectedVersion < 1 || !Number.isSafeInteger(expectedProposalRevision) || expectedProposalRevision < 0 ||
+      !(selected === 'accepted' || (Number.isSafeInteger(selected) && selected > 0))) {
+      res.status(400).json({ status: 'invalid_request', message: 'Choose a version from a current review.' }); return;
+    }
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('SELECT pg_advisory_xact_lock(71422301)');
+      const review = await readReview(client, id);
+      if (!review) { await client.query('COMMIT'); res.status(404).json({ status: 'not_found', message: 'Comment not found.' }); return; }
+      if (review.accepted.version !== expectedVersion || review.proposalRevision !== expectedProposalRevision || !review.alternatives.length) {
+        await client.query('COMMIT'); res.status(409).json({ status: 'stale_review', review }); return;
+      }
+      const chosen = selected === 'accepted' ? review.accepted : review.alternatives.find(item => item.alternativeId === selected);
+      if (!chosen) { await client.query('COMMIT'); res.status(400).json({ status: 'invalid_selection', message: 'Choose a version from this review.' }); return; }
+      if (selected !== 'accepted') {
+        await client.query(`UPDATE comments SET "postId"=$2, name=$3, email=$4, body=$5, version=version+1,
+          upload_label=$6, session_label=$7 WHERE id=$1`, [id, chosen.postId, chosen.name, chosen.email, chosen.body, chosen.uploadLabel, chosen.sessionLabel]);
+      }
+      await client.query('DELETE FROM alternatives WHERE comment_id=$1', [id]);
+      await client.query('UPDATE comments SET proposal_revision=proposal_revision+1 WHERE id=$1', [id]);
+      const resolved = await readReview(client, id);
+      await client.query('COMMIT');
+      res.json({ status: 'resolved', review: resolved });
     } catch (error) { await client.query('ROLLBACK'); throw error; }
     finally { client.release(); }
   });

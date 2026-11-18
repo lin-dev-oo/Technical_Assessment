@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 
-export type Comment = { id: number; postId: number; name: string; email: string; body: string };
+export type Comment = { id: number; postId: number; name: string; email: string; body: string; version: number; pendingCount: number };
 type Page = { comments: Comment[]; total: number; page: number; pageSize: number };
 
 // refresh is shared by uploads, explicit refresh, and future collaboration notifications.

@@ -43,7 +43,9 @@ test('imports accepted comments and retains them after reconnecting the service'
   let base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const upload = (id: string, body: string) => fetch(`${base}/api/uploads`, { method: 'POST', headers: { 'content-type': 'text/csv', 'x-upload-id': id }, body });
   const result = await upload('first', header + '1,1,Alice,a@example.com,Hello');
-  assert.deepEqual(await result.json(), { status: 'completed', inserted: 1, unchanged: 0 });
+  assert.deepEqual(await result.json(), { status: 'completed', inserted: 1, unchanged: 0, conflicts: 0 });
+  await upload('durable-proposal', header + '1,1,Alice,a@example.com,Pending after restart');
+  const before = await (await fetch(`${base}/api/comments/1/review`)).json();
   await new Promise<void>(resolve => server.close(() => resolve()));
   await pool.end();
   const secondPool = new Pool({ connectionString: databaseUrl });
@@ -54,14 +56,15 @@ test('imports accepted comments and retains them after reconnecting the service'
     const page = await (await fetch(`${base}/api/comments`)).json();
     assert.equal(page.total, 1);
     assert.equal(page.comments[0].body, 'Hello');
-    assert.deepEqual(await (await upload('first', header + '1,1,Alice,a@example.com,Hello')).json(), { status: 'completed', inserted: 1, unchanged: 0 });
+    assert.deepEqual(await (await fetch(`${base}/api/comments/1/review`)).json(), before);
+    assert.deepEqual(await (await upload('first', header + '1,1,Alice,a@example.com,Hello')).json(), { status: 'completed', inserted: 1, unchanged: 0, conflicts: 0 });
   } finally {
     await new Promise<void>(resolve => server.close(() => resolve()));
     await secondPool.end();
   }
 });
 
-async function withApi(run: (api: { upload: (id: string, csv: string | Buffer) => Promise<Response>; list: (query?: string) => Promise<any>; pool: Pool }) => Promise<void>) {
+async function withApi(run: (api: { upload: (id: string, csv: string | Buffer) => Promise<Response>; list: (query?: string) => Promise<any>; pool: Pool; request: (path: string, body?: object) => Promise<Response> }) => Promise<void>) {
   const pool = new Pool({ connectionString: databaseUrl });
   await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
   const app = await createApp(pool);
@@ -70,53 +73,40 @@ async function withApi(run: (api: { upload: (id: string, csv: string | Buffer) =
   try {
     await run({
       pool,
+      request: (path, body) => fetch(`${base}${path}`, body ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : undefined),
       upload: (id, body) => fetch(`${base}/api/uploads`, { method: 'POST', headers: { 'content-type': 'text/csv', 'x-upload-id': id }, body: body as BodyInit }),
       list: async (query = '') => (await fetch(`${base}/api/comments${query}`)).json(),
     });
   } finally { await new Promise<void>(resolve => server.close(() => resolve())); await pool.end(); }
 }
 
-test('validates atomically, counts unchanged comments, retains omitted IDs, and rejects an entire changed upload', () => withApi(async ({ upload, list }) => {
+test('validates atomically, counts unchanged comments, retains omitted IDs, and stages changed comments while inserting new IDs', () => withApi(async ({ upload, list }) => {
   await upload('seed', header + '1,1,A,a@b.com,One\n1,2,B,b@b.com,Two');
   const invalid = await upload('invalid', header + '1,3,C,c@b.com,Three\n0,4, ,bad,');
   assert.equal(invalid.status, 422);
   assert.equal((await list()).total, 2);
   const merged = await upload('merge', header + '1,1,A,a@b.com,One\n1,3,C,c@b.com,Three');
-  assert.deepEqual(await merged.json(), { status: 'completed', inserted: 1, unchanged: 1 });
+  assert.deepEqual(await merged.json(), { status: 'completed', inserted: 1, unchanged: 1, conflicts: 0 });
   const changed = await upload('changed', header + '1,1,A,a@b.com,Changed\n1,4,D,d@b.com,Four');
-  assert.equal(changed.status, 409);
-  assert.equal((await changed.json()).status, 'unsupported_conflict');
+  assert.equal(changed.status, 200);
+  assert.deepEqual(await changed.json(), { status: 'completed', inserted: 1, unchanged: 0, conflicts: 1 });
   const page = await list();
-  assert.deepEqual(page.comments.map((row: any) => [row.id, row.body]), [[1, 'One'], [2, 'Two'], [3, 'Three']]);
+  assert.deepEqual(page.comments.map((row: any) => [row.id, row.body]), [[1, 'One'], [2, 'Two'], [3, 'Three'], [4, 'Four']]);
 }));
 
 test('serializes concurrent retries and different uploads of a previously absent ID without overwriting', () => withApi(async ({ upload, list, pool }) => {
-  async function together(first: () => Promise<Response>, second: () => Promise<Response>) {
-    const blocker = await pool.connect();
-    await blocker.query('SELECT pg_advisory_lock(71422301)');
-    const requests = [first(), second()];
-    try {
-      const deadline = Date.now() + 5000;
-      while (true) {
-        const { rows: [{ waiting }] } = await pool.query("SELECT count(*)::integer AS waiting FROM pg_locks WHERE locktype = 'advisory' AND objid = 71422301 AND NOT granted");
-        if (waiting === 2) break;
-        if (Date.now() > deadline) throw new Error('Both API requests must reach the write barrier before releasing it.');
-        await new Promise(resolve => setImmediate(resolve));
-      }
-    } finally { await blocker.query('SELECT pg_advisory_unlock(71422301)'); blocker.release(); }
-    return Promise.all(requests);
-  }
   const csv = header + '1,1,A,a@b.com,One';
-  const retries = await together(() => upload('concurrent-retry', csv), () => upload('concurrent-retry', csv));
+  const retries = await together(pool, () => upload('concurrent-retry', csv), () => upload('concurrent-retry', csv));
   assert.deepEqual(await Promise.all(retries.map(response => response.json())), [
-    { status: 'completed', inserted: 1, unchanged: 0 }, { status: 'completed', inserted: 1, unchanged: 0 },
+    { status: 'completed', inserted: 1, unchanged: 0, conflicts: 0 }, { status: 'completed', inserted: 1, unchanged: 0, conflicts: 0 },
   ]);
-  const competing = await together(() => upload('competing-a', header + '1,2,A,a@b.com,Alpha'), () => upload('competing-b', header + '1,2,B,b@b.com,Beta'));
-  assert.deepEqual(competing.map(response => response.status).sort(), [200, 409]);
+  const competing = await together(pool, () => upload('competing-a', header + '1,2,A,a@b.com,Alpha'), () => upload('competing-b', header + '1,2,B,b@b.com,Beta'));
+  assert.deepEqual(competing.map(response => response.status).sort(), [200, 200]);
   const results = await Promise.all(competing.map(response => response.json()));
-  assert.equal(results.filter(result => result.status === 'completed').length, 1);
+  assert.equal(results.filter(result => result.inserted === 1).length, 1);
+  assert.equal(results.filter(result => result.conflicts === 1).length, 1);
   const accepted = (await list()).comments.find((comment: any) => comment.id === 2);
-  assert.equal(accepted.body, competing[0].status === 200 ? 'Alpha' : 'Beta');
+  assert.equal(accepted.body, results[0].inserted === 1 ? 'Alpha' : 'Beta');
 }));
 
 test('rolls back database failures and permits a deliberate retry after recovery', () => withApi(async ({ upload, list, pool }) => {
@@ -125,7 +115,7 @@ test('rolls back database failures and permits a deliberate retry after recovery
   assert.equal((await upload('rollback', csv)).status, 503);
   assert.equal((await list()).total, 0);
   await pool.query('ALTER TABLE comments DROP CONSTRAINT injected_failure');
-  assert.deepEqual(await (await upload('rollback', csv)).json(), { status: 'completed', inserted: 2, unchanged: 0 });
+  assert.deepEqual(await (await upload('rollback', csv)).json(), { status: 'completed', inserted: 2, unchanged: 0, conflicts: 0 });
 }));
 
 test('bounds files at the HTTP boundary and paginates the complete collection in stable ID order', () => withApi(async ({ upload, list }) => {
@@ -161,4 +151,89 @@ test('returns persistent original outcomes for retries and rejects changed-conte
   const changed = await (await upload('conflict-one', csv)).json();
   await pool.query("UPDATE comments SET body = 'One' WHERE id = 1");
   assert.deepEqual(await (await upload('conflict-one', csv)).json(), changed);
+}));
+
+
+test('reviews distinct alternatives together and resolves a complete version without recreating proposals on retry', () => withApi(async ({ upload, list, request }) => {
+  await upload('accepted', header + '1,1,A,a@b.com,Accepted');
+  const proposed = header + '2,1,B,b@b.com,Alternative';
+  const outcome = await (await upload('proposal', proposed)).json();
+  await upload('same-values', proposed);
+  await upload('another', header + '3,1,C,c@b.com,Third');
+  const review = await (await request('/api/comments/1/review')).json();
+  assert.equal(review.accepted.body, 'Accepted');
+  assert.deepEqual(review.alternatives.map((item: any) => item.body), ['Alternative', 'Third']);
+  assert.equal(review.proposalRevision, 2);
+  assert.equal((await list()).comments[0].pendingCount, 2);
+  const response = await request('/api/comments/1/resolve', { expectedVersion: review.accepted.version, expectedProposalRevision: review.proposalRevision, selected: review.alternatives[0].alternativeId });
+  assert.equal(response.status, 200);
+  const resolved = await (await request('/api/comments/1/review')).json();
+  assert.equal(resolved.accepted.body, 'Alternative');
+  assert.equal(resolved.accepted.postId, 2);
+  assert.equal(resolved.accepted.version, 2);
+  assert.deepEqual(resolved.alternatives, []);
+  assert.deepEqual(await (await upload('proposal', proposed)).json(), outcome);
+  assert.deepEqual((await (await request('/api/comments/1/review')).json()).alternatives, []);
+}));
+
+async function together(pool: Pool, first: () => Promise<Response>, second: () => Promise<Response>) {
+    const blocker = await pool.connect();
+    await blocker.query('SELECT pg_advisory_lock(71422301)');
+    const requests = [first(), second()];
+    try {
+      const deadline = Date.now() + 5000;
+      while (true) {
+        const { rows: [{ waiting }] } = await pool.query("SELECT count(*)::integer AS waiting FROM pg_locks WHERE locktype = 'advisory' AND objid = 71422301 AND NOT granted");
+        if (waiting === 2) break;
+        if (Date.now() > deadline) throw new Error('Both API requests must reach the write barrier before releasing it.');
+        await new Promise(resolve => setImmediate(resolve));
+      }
+    } finally { await blocker.query('SELECT pg_advisory_unlock(71422301)'); blocker.release(); }
+    return Promise.all(requests);
+  }
+
+
+test('rejects a review after new alternatives or another resolution, even when accepted values stay unchanged', () => withApi(async ({ upload, request, pool }) => {
+  await upload('seed', header + '1,1,A,a@b.com,Accepted');
+  await upload('first-proposal', header + '1,1,A,a@b.com,First');
+  const first = await (await request('/api/comments/1/review')).json();
+  const keep = { expectedVersion: first.accepted.version, expectedProposalRevision: first.proposalRevision, selected: 'accepted' };
+  await upload('second-proposal', header + '1,1,A,a@b.com,Second');
+  const stale = await request('/api/comments/1/resolve', keep);
+  assert.equal(stale.status, 409);
+  const refreshed = await stale.json();
+  assert.equal(refreshed.status, 'stale_review');
+  assert.equal(refreshed.review.alternatives.length, 2);
+  const review = refreshed.review;
+  const chooseAccepted = { ...keep, expectedProposalRevision: review.proposalRevision };
+  const chooseAlternative = { ...chooseAccepted, selected: review.alternatives[0].alternativeId };
+  const competing = await together(pool, () => request('/api/comments/1/resolve', chooseAccepted), () => request('/api/comments/1/resolve', chooseAlternative));
+  assert.deepEqual(competing.map(item => item.status).sort(), [200, 409]);
+  const winner = await (await request('/api/comments/1/review')).json();
+  assert.equal(winner.accepted.body, competing[0].status === 200 ? 'Accepted' : 'First');
+  assert.deepEqual(winner.alternatives, []);
+  await upload('after-resolution', header + '1,1,A,a@b.com,Later');
+  const newReview = await (await request('/api/comments/1/review')).json();
+  assert.equal(newReview.alternatives.length, 1);
+  assert.ok(newReview.proposalRevision > review.proposalRevision);
+  assert.equal((await request('/api/comments/1/resolve', chooseAccepted)).status, 409);
+  const result = await request('/api/comments/1/resolve', { expectedVersion: newReview.accepted.version, expectedProposalRevision: newReview.proposalRevision, selected: 'accepted' });
+  assert.equal(result.status, 200);
+  const retained = (await result.json()).review;
+  assert.equal(retained.accepted.version, newReview.accepted.version);
+  assert.equal(retained.accepted.body, newReview.accepted.body);
+  assert.ok(retained.proposalRevision > newReview.proposalRevision);
+}));
+
+test('rolls back proposals and revisions when another record fails in the same upload', () => withApi(async ({ upload, request, pool }) => {
+  await upload('seed', header + '1,1,A,a@b.com,Accepted');
+  await pool.query('ALTER TABLE comments ADD CONSTRAINT injected_failure CHECK (id <> 99)');
+  const csv = header + '1,1,A,a@b.com,Alternative\n1,99,B,b@b.com,New';
+  assert.equal((await upload('failed-proposals', csv)).status, 503);
+  const review = await (await request('/api/comments/1/review')).json();
+  assert.equal(review.proposalRevision, 0);
+  assert.deepEqual(review.alternatives, []);
+  await pool.query('ALTER TABLE comments DROP CONSTRAINT injected_failure');
+  assert.deepEqual(await (await upload('failed-proposals', csv)).json(), { status: 'completed', inserted: 1, unchanged: 0, conflicts: 1 });
+  assert.equal((await (await request('/api/comments/1/review')).json()).alternatives.length, 1);
 }));
