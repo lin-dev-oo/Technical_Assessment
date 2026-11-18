@@ -68,14 +68,14 @@ export function CommentEditor({ initial, current, retained, sessionLabel, onCanc
     <tr className="editing-row" aria-label={`Editing comment ${initial.id}`}>
       <td className="identifier">#{initial.id}<span className="draft-label">Unsaved draft</span>{retained && <span className="draft-retained">Outside this page/search</span>}</td>
       <td>{field('postId', 'Post ID')}</td>
-      <td>{field('name', 'Name')}{field('email', 'Email')}</td>
+      <td>{field('name', 'Name')}</td><td>{field('email', 'Email')}</td>
       <td>{field('body', 'Body')}</td>
       <td><form id={formId} className="cell-editor-actions" aria-label={`Edit comment ${initial.id}`} onSubmit={event => { event.preventDefault(); void save(); }}>
         <Button disabled={busy || stale} size="sm" type="submit">{busy ? 'Saving…' : 'Save'}</Button>
         <Button type="button" variant="outline" size="sm" disabled={busy} onClick={onCancel}>Cancel</Button>
       </form></td>
     </tr>
-    {(error || stale) && <tr className="edit-feedback-row"><td colSpan={5}><div className="edit-feedback-content">
+    {(error || stale) && <tr className="edit-feedback-row"><td colSpan={6}><div className="edit-feedback-content">
       {error && <p className="feedback error" role="alert">{error}</p>}
       {stale && <>
         <div className="review-notice" role="status">
