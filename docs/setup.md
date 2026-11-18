@@ -110,3 +110,5 @@ Ticket 02 verification: 4 parser tests, 7 public HTTP/PostgreSQL tests, 3 Chromi
 
 
 Ticket 03 automated verification: 10 public HTTP/PostgreSQL tests and 7 Chromium browser tests pass, together with the production TypeScript/Vite build. Browser tests save comparison screenshots for desktop and narrow viewports, including supplied sample data and three alternatives with long name/email/unbroken multiline body values. Visual inspection is recorded by the reviewing agent separately; screenshot generation alone is not a claim of visual verification. Real-time notifications, editing and presence remain dependent work.
+
+Ticket 03 visual/review verification: inspected generated Chromium screenshots of the supplied sample and several long alternatives at 1440px and 390px. Comparison labels, changed fields, purple whole-version selection, mobile scrolling and footer actions were readable. Focus restoration, failed-resolution selection preservation and stale-review recovery also passed browser checks. Standards and spec reviews each reported zero actionable findings. Four parser tests passed as part of the final run.
