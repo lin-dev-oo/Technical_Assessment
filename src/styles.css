@@ -151,3 +151,12 @@ th:first-child { width: 125px; }
 .accepted-preview dt { font-size: 11px; color: #72677d; margin-bottom: 7px; }
 .accepted-preview dd { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; font-size: 12px; line-height: 1.7; }
 .comments-screen > .collection > .table-scroll > table > thead > tr > th:last-child { width: 110px; }
+.comments-screen > .collection > .table-scroll > table > thead > tr > th:nth-child(2) { width: 125px; }
+.edit-scroll-hint { display: none; }
+@media (max-width: 640px) {
+  .edit-scroll-hint { display: block; margin: 0; padding: 0 20px 16px; color: var(--color-secondary-text); font-size: 12px; line-height: 1.6; }
+  .edit-feedback-content { position: sticky; left: 20px; width: calc(100vw - 80px); max-width: 100%; }
+  .edit-feedback-row > td { padding-left: 20px; padding-right: 20px; }
+  .accepted-preview dl { grid-template-columns: minmax(0, 1fr); gap: 14px; }
+  .accepted-preview dd { max-height: 160px; }
+}

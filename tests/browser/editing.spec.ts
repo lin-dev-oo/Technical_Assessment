@@ -26,7 +26,13 @@ test('edits non-identifier fields with explicit Save and Cancel', async ({ page,
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.screenshot({ path: testInfo.outputPath('edit-desktop.png'), fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.getByText('Scroll across the table to edit fields and reach Save / Cancel.')).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath('edit-mobile.png'), fullPage: true });
+  await form.getByRole('button', { name: 'Cancel', exact: true }).scrollIntoViewIfNeeded();
+  await expect(form.getByRole('button', { name: 'Save', exact: true })).toBeInViewport();
+  await expect(form.getByRole('button', { name: 'Cancel', exact: true })).toBeInViewport();
+  await expect(page.getByLabel('Body', { exact: true })).toBeInViewport();
+  await page.screenshot({ path: testInfo.outputPath('edit-mobile-actions.png'), fullPage: true });
   await form.getByRole('button', { name: 'Save', exact: true }).click();
   await expect(form).toHaveCount(0);
   await expect(page.getByText('Saved name', { exact: true })).toBeVisible();
@@ -52,7 +58,11 @@ test('preserves a stale draft across refresh and search and requires a deliberat
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.screenshot({ path: testInfo.outputPath('stale-edit-desktop.png'), fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole('region', { name: 'Accepted comments table', exact: true }).evaluate(element => { element.scrollLeft = 0; });
   await page.screenshot({ path: testInfo.outputPath('stale-edit-mobile.png'), fullPage: true });
+  await form.getByRole('button', { name: 'Cancel', exact: true }).scrollIntoViewIfNeeded();
+  await expect(page.getByRole('region', { name: 'Current accepted version', exact: true })).toBeInViewport();
+  await page.screenshot({ path: testInfo.outputPath('stale-edit-mobile-actions.png'), fullPage: true });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
   await page.getByRole('button', { name: 'Use current accepted version' }).click();
   await expect(form.getByRole('button', { name: 'Save', exact: true })).toBeEnabled();

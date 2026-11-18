@@ -75,16 +75,16 @@ export function CommentEditor({ initial, current, retained, sessionLabel, onCanc
         <Button type="button" variant="outline" size="sm" disabled={busy} onClick={onCancel}>Cancel</Button>
       </form></td>
     </tr>
-    {(error || stale) && <tr className="edit-feedback-row"><td colSpan={5}>
+    {(error || stale) && <tr className="edit-feedback-row"><td colSpan={5}><div className="edit-feedback-content">
       {error && <p className="feedback error" role="alert">{error}</p>}
       {stale && <>
         <div className="review-notice" role="status">
-          <p>{conflicted ? 'Resolve pending conflicts before saving this draft.' : 'Compare the accepted version, then deliberately use it as your save baseline.'}</p>
+          <p>{conflicted ? 'Resolve pending conflicts before saving this draft.' : 'Compare the current accepted values before saving your draft.'}</p>
           {conflicted && <Button type="button" variant="outline" size="sm" onClick={onReview}>Review pending conflict</Button>}
           <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => void updateBaseline()}>Use current accepted version</Button>
         </div>
         <section className="accepted-preview" aria-label="Current accepted version"><h3>Current accepted version</h3><dl>{fields.map(([field, label]) => <div key={field}><dt>{label}</dt><dd>{accepted[field]}</dd></div>)}</dl></section>
       </>}
-    </td></tr>}
+    </div></td></tr>}
   </>;
 }
