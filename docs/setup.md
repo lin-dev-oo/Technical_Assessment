@@ -18,13 +18,13 @@ Accepted comments and upload outcomes survive application restarts and `docker c
 
 ## Current slice
 
-Ticket 01 provides validated uploads, durable retry identities, accepted-comment browsing, pagination and the Compose runtime. Search, editing, conflict review and real-time collaboration belong to later dependent tickets and are not implemented here. Until ticket 03, a changed existing comment rejects the **whole** file with an actionable message. It never silently overwrites accepted data or inserts other new IDs from that rejected file.
+Tickets 01–02 provide validated uploads, durable retry identities, accepted-comment browsing, whole-dataset search, pagination and the Compose runtime. Editing, conflict review and real-time collaboration belong to later dependent tickets. Until ticket 03, a changed existing comment rejects the **whole** file with an actionable message. It never silently overwrites accepted data or inserts other new IDs from that rejected file.
 
 ## Demo
 
 1. Open the app. An empty dataset shows a centered **Upload CSV** button; persisted comments open directly in the table.
 2. Click **Upload CSV** and select the supplied `data.csv`. Selecting the file starts its upload immediately. Transfer progress reflects bytes sent; the separate processing state covers validation and saving. Expect **500 inserted, 0 unchanged** in a fresh database, followed by the table screen.
-3. Inspect the table, use the row chevron to read a complete comment, move between pages and switch between 10, 25 and 50 rows. The default is 25.
+3. Inspect the table, use the row chevron to read a complete comment, move between pages and switch between 10, 25 and 50 rows. The default is 25. Search across all accepted names, emails and comment bodies without case sensitivity; numeric terms also match an exact comment ID or post ID. Search changes reset to page one after a 250 ms typing debounce. Clear search restores the full collection. Refresh preserves the query and current page, clamping to the last valid page when needed.
 4. Use **Upload CSV** above the table and select the same file again. Expect **0 inserted, 500 unchanged**. Omitted IDs are retained when you upload a subset.
 5. Restart the app, reload and verify the collection remains.
 6. Try a file with a new ID plus an invalid record. No new comments should appear; correct all listed record/field errors and choose the corrected file.
@@ -61,6 +61,18 @@ npm run dev:web
 
 The Vite development frontend is on http://localhost:5173 and proxies `/api` to the Node server on port 3000. Stop the Compose app before starting the host server on that same port. `npm run build` checks TypeScript and creates the production browser bundle.
 
+## Focused browser tests
+
+After installing host dependencies, install the Chromium test browser once:
+
+```powershell
+npx playwright install chromium
+$env:TEST_DATABASE_URL = 'postgres://comments:comments@127.0.0.1:5433/comments_test'
+npm run test:browser
+```
+
+The browser suite builds the app and starts a separate HTTP server on port 3100. It resets the dedicated test database schema, then seeds comments through the API. Run it separately from API tests against the same database. It covers search beyond the visible page, page sizes and reset, empty results, refresh retaining context, clamping after accepted data stops matching, and a controlled delayed response from a superseded query. SQL only sets up the simulated accepted edit; assertions use the browser. API tests also cover filtered totals, page boundaries, empty results, literal text and exact numeric search.
+
 ## Data and concurrency decisions
 
 - The fixed schema is `postId,id,name,email,body`, with positive PostgreSQL integer IDs (maximum 2147483647). Header matching ignores case and order, while rejecting missing, unexpected, duplicate, blank or padded headers. Required text must be nonblank, email syntax is checked, and original accepted text whitespace is preserved.
@@ -68,17 +80,17 @@ The Vite development frontend is on http://localhost:5173 and proxies `/api` to 
 - The entire bounded file is received and parsed before taking the short shared transaction-level advisory lock (`71422301`). Accepted rows are classified under the lock. Ordinary PostgreSQL columns and the primary key on `id` enforce identity; a transaction commits inserted rows together with their upload outcome. Every future mutation must take this same lock.
 - The browser gives each selected file an upload identity. The server stores the raw file SHA-256 digest, HTTP outcome and response. Retrying the same identity and bytes returns the original result, even if accepted data later changes; different bytes with that identity return `identity_reused`. Terminal validation/conflict rejections are durable too. Database/transport outages remain retryable and do not store an outcome when the transaction rolls back. Nothing holds a database lock during transfer or parsing.
 - The browser keeps the selected file and identity after an uncertain response so Retry upload is safe. Selecting a file starts a new upload with a new identity. Processing begins after the browser finishes transferring; the server does not simulate transfer percentages.
-- Accepted comments are listed by ID with a consistent snapshot for total and page contents. Out-of-range pages clamp to the final valid page. The UI can refresh explicitly; later tickets add live refresh and search.
+- Accepted comments are searched and listed by ID with a consistent snapshot for filtered totals and page contents. Text searches are literal substrings (including `%` and `_`), with exact numeric matching for id/postId. Out-of-range pages clamp to the final valid page, and empty results return page one. The browser debounces typing for 250 ms, cancels superseded requests and guards their responses. Explicit refresh and upload completion reuse `useComments.refresh`, preserving query/page; later collaboration notifications can call the same behavior.
 - This is a single-backend local assessment deployment. Authentication and distributed fanout are outside the confirmed scope.
 
 ## API
 
 - `GET /api/health`: application/database readiness.
 - `GET /api/sample`: the original sample CSV.
-- `GET /api/comments?page=1&pageSize=25`: accepted rows, total, effective page and size. Supported sizes: 10, 25, 50.
+- `GET /api/comments?q=search&page=1&pageSize=25`: accepted rows, filtered total, effective page and size. Optional `q` searches name/email/body case-insensitively and matches id/postId exactly for positive integer terms. Supported sizes: 10, 25, 50 (default 25).
 - `POST /api/uploads`: raw CSV bytes and an `X-Upload-Id` header (1–128 letters, digits, `_` or `-`). Returns `completed` with inserted/unchanged counts (200), structured `rejected` validation errors (422), `unsupported_conflict` (409), or `identity_reused` (409). Service failures return retryable 503.
 
-The frontend uses shadcn/ui Button and Progress components with Radix primitives, styled with shared purple/neutral tokens. Long values have a full-content row expansion and the table scrolls deliberately on narrow screens. Visual verification is recorded separately after inspecting the running application.
+The frontend uses shadcn/ui Button, Input and Progress components with Radix primitives, styled with shared purple/neutral tokens. Long values have a full-content row expansion and the table scrolls deliberately on narrow screens. Visual verification is recorded separately after inspecting the running application.
 
 ## Verification notes
 
@@ -87,3 +99,5 @@ The simplified upload/table flow was verified against a separate empty PostgreSQ
 The running Compose app was inspected at 1440px desktop and 390px narrow widths with the supplied 500-comment sample and a challenging long-name/email/multiline/unbroken-body fixture. Empty, successful import, validation rejection, changed-comment rejection, expanded full content, row navigation and keyboard focus were inspected. Restarting the Compose app and reloading retained all 501 accepted comments from that demo. Follow-up inspection confirmed that choosing `data.csv` again permits a second import and reports 0 inserted, 500 unchanged. At the 390px narrow viewport, the document scroll width was 375px with no page overflow. Stopping the app produced the network-error state; after restart, Retry import returned the original outcome of 0 inserted, 500 unchanged. File transfer and processing completed too quickly to visually inspect separately, so those two states are not claimed as separately visually verified.
 
 The final automated run passed four parser tests, six public HTTP/PostgreSQL tests and the production TypeScript/Vite build. Runtime dependency audit reports no known advisories. The development-only Vite globbing dependency chain currently reports a picomatch advisory without a patched version in the audit data; it is not part of the served runtime request path.
+
+Ticket 02 verification: 4 parser tests, 7 public HTTP/PostgreSQL tests, 3 Chromium browser tests and the production build passed. Standards and spec reviews found no actionable issues. The Compose UI was visually inspected with the supplied 500-comment sample at 1440px and 390px: populated search, empty results and recovery, keyboard focus, page navigation and refresh all worked. No document overflow at 390px; the mobile empty message was corrected to remain outside horizontal table scrolling. A new challenging-content fixture was not visually retested in this slice.

@@ -21,12 +21,19 @@ export async function createApp(pool: Pool) {
     const pageSize = [10, 25, 50].includes(Number(req.query.pageSize)) ? Number(req.query.pageSize) : 25;
     const requested = Number(req.query.page);
     const requestedPage = Number.isSafeInteger(requested) && requested > 0 ? requested : 1;
+    const query = typeof req.query.q === 'string' ? req.query.q : '';
+    const numeric = /^\d+$/.test(query) ? Number(query) : NaN;
+    const numericId = Number.isSafeInteger(numeric) && numeric > 0 && numeric <= 2147483647 ? numeric : null;
+    // strpos treats %, _ and backslashes as ordinary search text, unlike LIKE patterns.
+    const filter = `WHERE $1 = '' OR strpos(lower(name), lower($1)) > 0
+      OR strpos(lower(email), lower($1)) > 0 OR strpos(lower(body), lower($1)) > 0
+      OR id = $2 OR "postId" = $2`;
     const client = await pool.connect();
     try {
       await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
-      const { rows: [{ total }] } = await client.query('SELECT count(*)::integer AS total FROM comments');
+      const { rows: [{ total }] } = await client.query(`SELECT count(*)::integer AS total FROM comments ${filter}`, [query, numericId]);
       const page = Math.min(requestedPage, Math.max(1, Math.ceil(total / pageSize)));
-      const { rows: comments } = await client.query('SELECT id, "postId", name, email, body, version FROM comments ORDER BY id LIMIT $1 OFFSET $2', [pageSize, (page - 1) * pageSize]);
+      const { rows: comments } = await client.query(`SELECT id, "postId", name, email, body, version FROM comments ${filter} ORDER BY id LIMIT $3 OFFSET $4`, [query, numericId, pageSize, (page - 1) * pageSize]);
       await client.query('COMMIT');
       res.json({ comments, total, page, pageSize });
     } catch (error) { await client.query('ROLLBACK'); throw error; }

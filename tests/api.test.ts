@@ -9,6 +9,32 @@ if (!databaseUrl) throw new Error('Set TEST_DATABASE_URL to a dedicated PostgreS
 if (!new URL(databaseUrl).pathname.endsWith('_test')) throw new Error('TEST_DATABASE_URL database name must end in _test; tests reset its public schema.');
 const header = 'postId,id,name,email,body\n';
 
+test('searches the complete accepted dataset with literal case-insensitive text and exact numeric IDs', () => withApi(async ({ upload, list }) => {
+  const rows = Array.from({ length: 31 }, (_, i) => `7,${i + 1},Ordinary,user${i + 1}@example.com,Body`);
+  rows.push('42,142,MiXeD title,special@example.com,Literal 100%_match');
+  await upload('search-fixture', header + rows.join('\n'));
+  const ids = async (query: string) => (await list(`?q=${encodeURIComponent(query)}`)).comments.map((row: any) => row.id);
+  assert.deepEqual(await ids('mixed'), [142]);
+  assert.deepEqual(await ids('SPECIAL@EXAMPLE'), [142]);
+  assert.deepEqual(await ids('100%_MATCH'), [142]);
+  assert.deepEqual(await ids('100%_missing'), []);
+  assert.deepEqual(await ids('42'), [142]);
+  assert.deepEqual(await ids('31'), [31]);
+  assert.deepEqual(await ids('2147483648'), []);
+  assert.deepEqual(await ids('absent'), []);
+  assert.deepEqual(await ids('14'), [14]);
+  const filtered = await list('?q=ordinary&page=999&pageSize=10');
+  assert.equal(filtered.total, 31);
+  assert.equal(filtered.page, 4);
+  assert.deepEqual(filtered.comments.map((row: any) => row.id), [31]);
+  const first = await list('?q=ordinary&pageSize=25');
+  assert.equal(first.total, 31);
+  assert.equal(first.comments.length, 25);
+  assert.equal(first.comments[0].id, 1);
+  assert.equal(first.comments[24].id, 25);
+  assert.deepEqual(await list('?q=absent&page=999&pageSize=50'), { comments: [], total: 0, page: 1, pageSize: 50 });
+}));
+
 test('imports accepted comments and retains them after reconnecting the service', async () => {
   const pool = new Pool({ connectionString: databaseUrl });
   await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
