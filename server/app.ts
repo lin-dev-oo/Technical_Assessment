@@ -2,8 +2,7 @@ import express from 'express';
 import { attachImports } from './imports.js';
 import type { Pool, PoolClient } from 'pg';
 import path from 'node:path';
-import { createHash } from 'node:crypto';
-import { MAX_BYTES, parseUpload, validateFields } from './csv.js';
+import { validateFields } from './csv.js';
 
 async function readReview(client: PoolClient, id: number) {
   const { rows: [accepted] } = await client.query(`SELECT id, "postId", name, email, body, version,
@@ -19,13 +18,6 @@ async function readReview(client: PoolClient, id: number) {
 function commentId(value: string) {
   const id = Number(value);
   return /^\d+$/.test(value) && Number.isInteger(id) && id > 0 && id <= 2147483647 ? id : null;
-}
-
-function uploadLabel(value: string | undefined) {
-  if (!value) return 'CSV upload';
-  // The browser encodes filenames because HTTP header values cannot carry arbitrary Unicode.
-  try { return decodeURIComponent(value).slice(0, 160); }
-  catch { return value.slice(0, 160); }
 }
 
 export async function createApp(pool: Pool) {
@@ -72,65 +64,6 @@ export async function createApp(pool: Pool) {
       const { rows: comments } = await client.query(`SELECT id, "postId", name, email, body, version, proposal_revision AS "proposalRevision", (SELECT count(*)::integer FROM alternatives WHERE comment_id = comments.id) AS "pendingCount" FROM comments ${filter} ORDER BY id LIMIT $3 OFFSET $4`, [query, numericId, pageSize, (page - 1) * pageSize]);
       await client.query('COMMIT');
       res.json({ comments, total, datasetTotal, conflictIds, page, pageSize });
-    } catch (error) { await client.query('ROLLBACK'); throw error; }
-    finally { client.release(); }
-  });
-  app.post('/api/uploads', async (req, res) => {
-    const requestId = req.get('x-upload-id');
-    if (!requestId || !/^[A-Za-z0-9_-]{1,128}$/.test(requestId)) { res.status(400).json({ status: 'invalid_identity', message: 'Supply a unique X-Upload-Id (1–128 letters, numbers, underscores or hyphens).' }); return; }
-    const hash = createHash('sha256');
-    let size = 0;
-    const chunks: Buffer[] = [];
-    for await (const piece of req) {
-      const chunk = Buffer.isBuffer(piece) ? piece : Buffer.from(piece);
-      hash.update(chunk); size += chunk.length;
-      if (size <= MAX_BYTES) chunks.push(chunk); else chunks.length = 0;
-    }
-    const digest = hash.digest('hex');
-    const parsed = size > MAX_BYTES
-      ? { ok: false as const, errors: [{ message: 'The file exceeds the 5 MB upload limit.' }] }
-      : parseUpload(Buffer.concat(chunks));
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-      // All dataset mutations use this transaction-scoped lock. Never acquire while receiving/parsing files.
-      await client.query('SELECT pg_advisory_xact_lock(71422301)');
-      const previous = (await client.query('SELECT digest, http_status, outcome FROM upload_requests WHERE id = $1', [requestId])).rows[0];
-      if (previous) {
-        await client.query('COMMIT');
-        if (previous.digest !== digest) res.status(409).json({ status: 'identity_reused', message: 'This upload identity was already used for another file. Choose the file again to start a new import.' });
-        else res.status(previous.http_status).json(previous.outcome);
-        return;
-      }
-      const finish = async (status: number, outcome: object, changedIds: number[] = []) => {
-        await client.query('INSERT INTO upload_requests (id, digest, http_status, outcome) VALUES ($1, $2, $3, $4)', [requestId, digest, status, JSON.stringify(outcome)]);
-        await client.query('COMMIT');
-        if (changedIds.length) app.emit('committed', changedIds);
-        res.status(status).json(outcome);
-      };
-      if (!parsed.ok) { await finish(422, { status: 'rejected', errors: parsed.errors }); return; }
-      const existing = await client.query('SELECT id, "postId", name, email, body FROM comments WHERE id = ANY($1::integer[])', [parsed.comments.map(comment => comment.id)]);
-      const accepted = new Map(existing.rows.map(comment => [comment.id, comment]));
-      const changed = parsed.comments.filter(comment => {
-        const current = accepted.get(comment.id);
-        return current && (current.postId !== comment.postId || current.name !== comment.name || current.email !== comment.email || current.body !== comment.body);
-      });
-      const fileLabel = uploadLabel(req.get('x-upload-label'));
-      const sessionLabel = (req.get('x-session-label') || 'Browser session').slice(0, 80);
-      const changedIds: number[] = [];
-      for (const comment of changed) {
-        const values = [comment.id, comment.postId, comment.name, comment.email, comment.body];
-        const duplicate = await client.query(`SELECT 1 FROM alternatives WHERE comment_id=$1 AND "postId"=$2 AND name=$3 AND email=$4 AND body=$5`, values);
-        if (duplicate.rowCount) continue;
-        await client.query(`INSERT INTO alternatives (comment_id, "postId", name, email, body, upload_label, session_label) VALUES ($1,$2,$3,$4,$5,$6,$7)`, [...values, fileLabel, sessionLabel]);
-        await client.query('UPDATE comments SET proposal_revision=proposal_revision+1 WHERE id=$1', [comment.id]);
-        changedIds.push(comment.id);
-      }
-      const incoming = parsed.comments.filter(comment => !accepted.has(comment.id));
-      await client.query(`INSERT INTO comments (id, "postId", name, email, body, upload_label, session_label)
-        SELECT id, "postId", name, email, body, $2, $3 FROM json_to_recordset($1::json)
-        AS incoming(id integer, "postId" integer, name text, email text, body text)`, [JSON.stringify(incoming), fileLabel, sessionLabel]);
-      await finish(200, { status: 'completed', inserted: incoming.length, unchanged: parsed.comments.length - incoming.length - changed.length, conflicts: changed.length, ...(changed.length ? { conflictIds: changed.map(comment => comment.id) } : {}) }, [...changedIds, ...incoming.map(comment => comment.id)]);
     } catch (error) { await client.query('ROLLBACK'); throw error; }
     finally { client.release(); }
   });

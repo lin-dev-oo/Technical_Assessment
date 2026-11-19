@@ -10,10 +10,10 @@ The latest version is ready for the agreed local assessment and interview demo. 
 | Supplied CSV and persistence | Original data.csv retained; sample imports, repeated imports, database reconnection and accepted-data persistence are covered. |
 | Upload progress and validation | Actual XHR byte progress, separate processing feedback, structured diagnostics, whole-file validation and atomic writes. Parser/API tests cover malformed quoting, UTF-8, headers, duplicate IDs, required fields and storage/upload bounds. |
 | Pagination and responsive search | Stable ID ordering; sizes 10/25/50; whole-dataset literal/case-insensitive search; exact numeric matching; debounce, obsolete-response protection, failed-search feedback and page clamping. Browser/API tests cover these. |
-| Duplicate/conflict detection and diff UI | Conflicting browser files are staged atomically. Whole-version comparison, changed fields, navigation and explicit batch application/rejection match the latest confirmed scope. Legacy persistent alternatives remain compatible. |
+| Duplicate/conflict detection and diff UI | Conflicting browser files are staged atomically. Whole-version comparison, changed fields, navigation and explicit batch application/rejection match the latest confirmed scope. The retired upload route returns 404; stored historical alternatives remain recoverable. |
 | Two-session editing and real-time updates | Version-checked saves/resolutions, preserved stale drafts, required current/mine decision, post-commit invalidations, heartbeat recovery and presence. Browser tests cover concurrent edits, uploads, resolutions and propagation deadlines. |
 | Docker Compose | App and PostgreSQL services, healthy database dependency, named volume, automatic schema initialization and production assets/API/WebSockets served by one app. No additional service is required for the new imports. |
-| Setup/demo documentation | Original brief preserved; setup and two-session walkthrough supplied. Current atomic protocol and legacy compatibility are distinguished. |
+| Setup/demo documentation | Original brief preserved; setup and two-session walkthrough supplied. The single atomic upload protocol and stored-conflict recovery are documented. |
 
 The newest approved behavior deliberately keeps conflicting uploads private until Apply upload. A second session sees committed changes, not another browser's unconfirmed file. Explain this interpretation during the demo, since the original brief's real-time diff wording could otherwise suggest a shared pending-upload viewer. Earlier persistent-proposal decisions in the specification are superseded by its latest section.
 
@@ -27,7 +27,7 @@ Setup/design/demo prose contained obsolete persistent-proposal descriptions. Upd
 
 ## Standards review
 
-No hard documented coding-standard violations found. Two maintenance judgments remain: upload intake/retry logic is duplicated between legacy and atomic endpoints, and src/main.tsx owns a large portion of the import lifecycle as well as the table UI. Shared intake helpers and a focused import-state hook would reduce drift and make races easier to reason about. Neither requires a pre-submission rewrite.
+No hard documented coding-standard violations found. Both earlier maintenance concerns are addressed: the obsolete /api/uploads implementation is removed, leaving one upload intake/retry path, and useImportWorkflow now owns transfer, retry identity, staging, choice navigation, live review recovery and dialogs. App composes it through four controls rather than managing its internal state. Existing stored-conflict recovery remains supported.
 
 ## Test completeness
 
@@ -53,4 +53,4 @@ Compose is complete for the assessment. Configuration, latest image build, app r
 - There is no login, authorization, distributed fanout or durable browser draft recovery. These are approved scope boundaries, but make this a local assessment application rather than a public multi-tenant deployment.
 - Keep the simultaneous-upload explanation precise: the first committed new ID wins initial acceptance; the other file requires explicit review. No automatic overwrite occurs.
 
-Review totals: **Standards: 0 hard violations, 2 maintenance judgments. Spec: 1 confirmed defect fixed, plus stale-Apply hardening and documentation corrections.** No unresolved critical/high-severity defect was established by this review.
+Review totals: **Standards: 0 hard violations; 2 earlier maintenance concerns addressed. Spec: 1 confirmed defect fixed, plus stale-Apply hardening and documentation corrections.** No unresolved critical/high-severity defect was established by this review.

@@ -17,7 +17,7 @@ A focused collaborative CSV application: one shared comments dataset, one table,
 - Restore the agreed sample-specific validation: positive integer id and postId, nonblank name/email/body, basic email syntax, and no repeated IDs within a file. Preserve text rather than silently trimming content.
 - Limit uploads to 5 MB and 10,000 records; reject empty and header-only files.
 - Show transfer progress separately from processing, then inserted, unchanged, and pending-conflict counts.
-- Browser uploads without conflicts insert new IDs immediately. A conflicting file is staged in full until Apply upload commits every choice and new row atomically. Dismissal rejects the whole file. Keep omitted IDs untouched. Persistent proposals belong to the compatible legacy /api/uploads endpoint.
+- Browser uploads without conflicts insert new IDs immediately. A conflicting file is staged in full until Apply upload commits every choice and new row atomically. Dismissal rejects the whole file. Keep omitted IDs untouched. The sole upload endpoint is /api/imports. The retired /api/uploads route returns 404; existing stored alternatives retain review/resolve recovery.
 - Keep distinct pending alternatives with basic upload/session labels. Compare parsed, validated record values directly to avoid identical alternatives; no elaborate provenance or hashing system.
 - Protect against repeated processing of retried upload requests with request identity and stored outcomes. Do not rely solely on record equality.
 
@@ -41,6 +41,13 @@ A focused collaborative CSV application: one shared comments dataset, one table,
 - Presence shows a temporary session label and color on the active cell. It is advisory and never locks a cell or replaces version checks.
 - Presence follows focus, clears when leaving/disconnecting, and expires after a short timeout. Unsaved drafts do not imply activity. No mouse-pointer tracking or shared keystrokes.
 - No accounts; session labels identify browser sessions, not authenticated people.
+
+## Module responsibilities
+
+- server/imports.ts owns the single atomic upload protocol; no parallel legacy upload implementation remains.
+- src/hooks/use-import-workflow.tsx owns upload transfer, retry identity, staged-review navigation/choices, live snapshot recovery and review dialogs. Its caller selects files, opens stored reviews, reads busy state and renders the dialog.
+- src/main.tsx composes browsing, realtime/presence, table editing and the import workflow.
+- Existing stored alternatives remain recoverable. Test fixtures seed this historical data directly; uploads in tests use the supported public import endpoint.
 
 ## Concurrency
 

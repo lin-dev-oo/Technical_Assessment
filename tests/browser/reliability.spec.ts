@@ -5,7 +5,7 @@ const header = 'postId,id,name,email,body\n';
 test.beforeEach(async ({ request }) => {
   const pool = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
   try { await pool.query('TRUNCATE alternatives, comments, upload_requests'); } finally { await pool.end(); }
-  await request.post('/api/uploads', { headers: { 'x-upload-id': 'reliability-seed' }, data: header + '1,1,Original,user@example.com,Original body' });
+  await request.post('/api/imports', { headers: { 'x-upload-id': 'reliability-seed' }, data: header + '1,1,Original,user@example.com,Original body' });
 });
 
 async function missPushFrames(page: Page) {

@@ -1,3 +1,4 @@
+import { seedLegacyAlternatives } from '../legacy-fixtures.js';
 import { test, expect } from '@playwright/test';
 import { Pool } from 'pg';
 const header = 'postId,id,name,email,body\n';
@@ -5,7 +6,7 @@ const header = 'postId,id,name,email,body\n';
 test.beforeEach(async ({ request }) => {
   const pool = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
   try { await pool.query('TRUNCATE alternatives, comments, upload_requests'); } finally { await pool.end(); }
-  await request.post('/api/uploads', { headers: { 'x-upload-id': 'seed' }, data: header + '1,1,Accepted name,accepted@example.com,Accepted body' });
+  await request.post('/api/imports', { headers: { 'x-upload-id': 'seed' }, data: header + '1,1,Accepted name,accepted@example.com,Accepted body' });
 });
 
 test('edits non-identifier fields with explicit Save and Cancel', async ({ page, request }, testInfo) => {
@@ -93,7 +94,8 @@ test('preserves a failed draft and blocks it until an incoming conflict is resol
   await expect(page.locator('[data-sonner-toast]')).toContainText('Save not confirmed.');
   await expect(page.getByLabel('body', { exact: true })).toHaveValue('Draft survives errors');
   await page.unroute('**/api/comments/1/edit');
-  await request.post('/api/uploads', { headers: { 'x-upload-id': 'pending' }, data: header + '2,1,Alternative,other@example.com,Other body' });
+  await seedLegacyAlternatives(header + '2,1,Alternative,other@example.com,Other body', 'Earlier upload', 'Earlier session');
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
   await expect(page.getByText('This record needs conflict review.', { exact: true })).toBeVisible({ timeout: 3000 });
   await expect(page.getByLabel('body', { exact: true })).toHaveValue('Draft survives errors');
   await expect(form.getByRole('button', { name: 'Save', exact: true })).toBeDisabled();
@@ -109,7 +111,7 @@ test('preserves a failed draft and blocks it until an incoming conflict is resol
   await form.getByRole('button', { name: 'Save', exact: true }).click();
   await expect(form).toHaveCount(0);
   await expect(page.getByText('Draft survives errors', { exact: true })).toBeVisible();
-  await request.post('/api/uploads', { headers: { 'x-upload-id': 'later-pending' }, data: header + '3,1,Later,later@example.com,Later body' });
+  await seedLegacyAlternatives(header + '3,1,Later,later@example.com,Later body', 'Earlier upload', 'Earlier session');
   await page.getByRole('button', { name: 'Refresh', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Edit record 1', exact: true })).toBeDisabled();
 });
@@ -119,7 +121,7 @@ test('requires deliberate baseline refresh after a conflict is resolved keeping 
   await page.getByRole('button', { name: 'Edit record 1', exact: true }).click();
   const form = page.getByRole('form', { name: 'Edit record 1', exact: true });
   await page.getByLabel('body', { exact: true }).fill('Kept draft');
-  await request.post('/api/uploads', { headers: { 'x-upload-id': 'conflict' }, data: header + '2,1,Alternative,other@example.com,Other body' });
+  await seedLegacyAlternatives(header + '2,1,Alternative,other@example.com,Other body', 'Earlier upload', 'Earlier session');
   await page.getByRole('button', { name: 'Refresh', exact: true }).click();
   await expect(form.getByRole('button', { name: 'Save', exact: true })).toBeDisabled();
   await page.getByRole('button', { name: 'Review conflict', exact: true }).click();

@@ -1,3 +1,4 @@
+import { seedLegacyAlternatives } from '../legacy-fixtures.js';
 import { test, expect } from '@playwright/test';
 import { Pool } from 'pg';
 import { readFile } from 'node:fs/promises';
@@ -6,7 +7,7 @@ const header = 'postId,id,name,email,body\n';
 test.beforeEach(async ({ request }) => {
   const pool = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
   try { await pool.query('TRUNCATE alternatives, comments, upload_requests'); } finally { await pool.end(); }
-  await request.post('/api/uploads', { headers: { 'x-upload-id': 'accepted', 'x-upload-label': 'original.csv', 'x-session-label': 'Session original' }, data: header + '1,1,Accepted name,accepted@example.com,Accepted body' });
+  await request.post('/api/imports', { headers: { 'x-upload-id': 'accepted', 'x-upload-label': 'original.csv', 'x-session-label': 'Session original' }, data: header + '1,1,Accepted name,accepted@example.com,Accepted body' });
 });
 
 test('compares all versions, highlights differences and chooses one complete alternative', async ({ page }, testInfo) => {
@@ -35,14 +36,15 @@ test('compares all versions, highlights differences and chooses one complete alt
 });
 
 test('refreshes a stale review and requires a new choice before keeping the current version', async ({ page, request, browser }, testInfo) => {
-  await request.post('/api/uploads', { headers: { 'x-upload-id': 'first-alternative' }, data: header + '1,1,First,first@example.com,First body' });
+  await seedLegacyAlternatives(header + '1,1,First,first@example.com,First body', 'Earlier upload', 'Earlier session');
   await page.goto('/');
   await page.getByRole('button', { name: /^Review conflicts/ }).click();
   const dialog = page.getByRole('dialog');
   await dialog.getByRole('radio', { name: 'Current version' }).check();
   const other = await browser.newPage();
   await other.goto('/');
-  await other.request.post('/api/uploads', { headers: { 'x-upload-id': 'later' }, data: header + '1,1,Later,later@example.com,Later body' });
+  await seedLegacyAlternatives(header + '1,1,Later,later@example.com,Later body', 'Earlier upload', 'Earlier session');
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
   await expect(dialog.getByText('Versions changed. Review and choose again.')).toBeVisible();
   await expect(dialog.getByRole('radio', { name: 'Alternative 2', exact: true })).toBeVisible();
   await expect(dialog.getByRole('button', { name: /^(Keep current version|Use alternative \d+|Use selected version)$/, exact: true })).toBeDisabled();
@@ -57,7 +59,7 @@ test('refreshes a stale review and requires a new choice before keeping the curr
 });
 
 test('keeps a choice on connection failure, supports keyboard dismissal and restores focus', async ({ page, request }) => {
-  await request.post('/api/uploads', { headers: { 'x-upload-id': 'proposal' }, data: header + '1,1,Alternative,other@example.com,Other body' });
+  await seedLegacyAlternatives(header + '1,1,Alternative,other@example.com,Other body', 'Earlier upload', 'Earlier session');
   await page.goto('/');
   const opener = page.getByRole('button', { name: /^Review conflicts/ });
   await opener.click();
@@ -78,13 +80,15 @@ test('keeps a choice on connection failure, supports keyboard dismissal and rest
 
 
 test('shows supplied sample and several long alternatives on desktop and narrow screens', async ({ page, request }, testInfo) => {
-  await request.post('/api/uploads', { headers: { 'x-upload-id': 'sample', 'x-upload-label': 'data.csv' }, data: await readFile('data.csv', 'utf8') });
+  const sample = await (await request.post('/api/imports', { headers: { 'x-upload-id': 'sample', 'x-upload-label': 'data.csv' }, data: await readFile('data.csv', 'utf8') })).json();
+  expect((await request.post('/api/imports/sample/commit', { data: { choices: [{ id: 1, selected: 'accepted', expectedVersion: 1, expectedProposalRevision: 0 }] } })).ok()).toBeTruthy();
+  await seedLegacyAlternatives([sample.reviews[1].alternatives[0]], 'data.csv');
   const name = 'Long name ' + 'VeryLongUnbrokenName'.repeat(12);
   const email = 'long'.repeat(40) + '@example.com';
   const body = 'A multiline comment.\n' + 'UnbrokenBody'.repeat(100) + '\nThe final line is still available.';
   const csv = header + '3,1,' + name + ',' + email + ',"' + body + '"';
-  await request.post('/api/uploads', { headers: { 'x-upload-id': 'long', 'x-upload-label': 'long-content.csv', 'x-session-label': 'Session long' }, data: csv });
-  await request.post('/api/uploads', { headers: { 'x-upload-id': 'third' }, data: header + '4,1,Third,third@example.com,Another alternative' });
+  await seedLegacyAlternatives(csv, 'long-content.csv', 'Session long');
+  await seedLegacyAlternatives(header + '4,1,Third,third@example.com,Another alternative', 'Earlier upload', 'Earlier session');
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto('/');
   await expect(page.getByText('1–25 of 500')).toBeVisible();
@@ -105,7 +109,7 @@ test('shows supplied sample and several long alternatives on desktop and narrow 
 
 test('shows changed fields first, reveals context, and makes the chosen whole version explicit', async ({ page, request }, testInfo) => {
   const body = 'Changed opening line\n' + 'Long body content '.repeat(40);
-  await request.post('/api/uploads', { headers: { 'x-upload-id': 'body-only', 'x-upload-label': 'changes.csv' }, data: header + '1,1,Accepted name,accepted@example.com,"' + body + '"' });
+  await seedLegacyAlternatives(header + '1,1,Accepted name,accepted@example.com,"' + body + '"', 'changes.csv', 'Earlier session');
   await page.goto('/');
   await page.getByRole('button', { name: /^Review conflicts/ }).click();
   const dialog = page.getByRole('dialog');
@@ -139,7 +143,7 @@ test('shows changed fields first, reveals context, and makes the chosen whole ve
 
 
 test('reviews the whole upload without saving individual choices and applies only after every choice', async ({ page, request }, testInfo) => {
-  await request.post('/api/uploads', { headers: { 'x-upload-id': 'second-record' }, data: header + '1,2,Second,second@example.com,Second body' });
+  await request.post('/api/imports', { headers: { 'x-upload-id': 'second-record' }, data: header + '1,2,Second,second@example.com,Second body' });
   const before = await (await request.get('/api/comments')).json();
   await page.goto('/');
   await page.getByRole('searchbox').fill('no-matching-record');
@@ -181,7 +185,7 @@ test('closing an unresolved upload rejects all its changes, including new rows',
 });
 
 test('rejecting after confirming an earlier conflict still leaves every record untouched', async ({ page, request }) => {
-  await request.post('/api/uploads', { headers: { 'x-upload-id': 'second' }, data: header + '1,2,Second,second@example.com,Second body' });
+  await request.post('/api/imports', { headers: { 'x-upload-id': 'second' }, data: header + '1,2,Second,second@example.com,Second body' });
   const before = await (await request.get('/api/comments')).json();
   await page.goto('/');
   await page.getByLabel('Choose CSV').setInputFiles({ name: 'partial.csv', mimeType: 'text/csv', buffer: Buffer.from(header + '1,1,Changed,accepted@example.com,Changed body\n1,2,Changed,second@example.com,Changed second\n1,3,New,new@example.com,New') });

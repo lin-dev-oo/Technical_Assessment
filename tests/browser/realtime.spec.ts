@@ -1,3 +1,4 @@
+import { seedLegacyAlternatives } from '../legacy-fixtures.js';
 import { test, expect, type WebSocketRoute, type Page } from '@playwright/test';
 import { Pool } from 'pg';
 
@@ -8,7 +9,7 @@ test.beforeEach(async () => {
 });
 
 test('reconnect refetches missed changes while keeping search, page, draft and focus', async ({ page, request }, testInfo) => {
-  await request.post('/api/uploads', { headers: { 'x-upload-id': 'seed' }, data: header + Array.from({ length: 30 }, (_, i) => `1,${i + 1},Name ${i + 1},user@example.com,Body`).join('\n') });
+  await request.post('/api/imports', { headers: { 'x-upload-id': 'seed' }, data: header + Array.from({ length: 30 }, (_, i) => `1,${i + 1},Name ${i + 1},user@example.com,Body`).join('\n') });
   let offline = false;
   let live: WebSocketRoute;
   await page.routeWebSocket('**/api/events*', socket => {
@@ -43,7 +44,7 @@ test('reconnect refetches missed changes while keeping search, page, draft and f
 });
 
 test('a conflicting upload stays private until the complete import is applied', async ({ page, browser, request }) => {
-  await request.post('/api/uploads', { headers: { 'x-upload-id': 'seed' }, data: header + '1,1,First,first@example.com,First body' });
+  await request.post('/api/imports', { headers: { 'x-upload-id': 'seed' }, data: header + '1,1,First,first@example.com,First body' });
   const other = await browser.newPage();
   await Promise.all([page.goto('/'), other.goto('/')]);
   await page.getByLabel('Choose CSV').setInputFiles({ name: 'second.csv', mimeType: 'text/csv', buffer: Buffer.from(header + '2,1,Second,second@example.com,Second body') });
@@ -58,7 +59,7 @@ test('a conflicting upload stays private until the complete import is applied', 
 });
 
 test('refreshes a draft outside the search results', async ({ page, request }) => {
-  await request.post('/api/uploads', { headers: { 'x-upload-id': 'seed' }, data: header + '1,1,Original,user@example.com,Body' });
+  await request.post('/api/imports', { headers: { 'x-upload-id': 'seed' }, data: header + '1,1,Original,user@example.com,Body' });
   await page.goto('/');
   await page.getByRole('button', { name: 'Edit record 1', exact: true }).click();
   await page.getByLabel('body', { exact: true }).fill('Kept draft');
@@ -86,7 +87,7 @@ async function race(first: Page, second: Page, action: string | RegExp, endpoint
 }
 
 test('two browsers race inline saves and preserve the rejected draft without retrying it', async ({ page, browser, request }) => {
-  await request.post('/api/uploads', { headers: { 'x-upload-id': 'seed' }, data: header + '1,1,Original,user@example.com,Body' });
+  await request.post('/api/imports', { headers: { 'x-upload-id': 'seed' }, data: header + '1,1,Original,user@example.com,Body' });
   const other = await browser.newPage();
   const views = [page, other];
   for (const view of views) {
@@ -108,8 +109,8 @@ test('two browsers race inline saves and preserve the rejected draft without ret
 });
 
 test('two browsers race whole-version resolutions and refresh the losing review within three seconds', async ({ page, browser, request }) => {
-  await request.post('/api/uploads', { headers: { 'x-upload-id': 'seed' }, data: header + '1,1,Original,user@example.com,Accepted body' });
-  await request.post('/api/uploads', { headers: { 'x-upload-id': 'proposal' }, data: header + '2,1,Alternative,other@example.com,Alternative body' });
+  await request.post('/api/imports', { headers: { 'x-upload-id': 'seed' }, data: header + '1,1,Original,user@example.com,Accepted body' });
+  await seedLegacyAlternatives(header + '2,1,Alternative,other@example.com,Alternative body', 'Earlier upload', 'Earlier session');
   const other = await browser.newPage();
   const views = [page, other];
   for (const view of views) {

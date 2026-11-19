@@ -11,7 +11,7 @@ const differs = (a: CommentValues, b: CommentValues) => fields.some(field => a[f
 const key = (id: string) => `import:${id}`;
 
 // Browser imports are staged as request data, never as accepted rows or cell locks.
-// The older /api/uploads merge API remains compatible for existing API clients.
+// Stored alternatives from earlier versions are included for conflict recovery.
 export async function attachImports(app: Express, pool: Pool) {
   await pool.query('ALTER TABLE upload_requests ADD COLUMN IF NOT EXISTS draft json');
 
