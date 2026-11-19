@@ -96,6 +96,39 @@ test('identical simultaneous uploads then competing edits require a current-or-m
   await other.close();
 });
 
+test('two open upload reviews refresh after one applies and editing presence still follows the active cell', async ({ page, browser, request }) => {
+  const other = await browser.newPage();
+  try {
+    await Promise.all([page.goto('/'), other.goto('/')]);
+    for (const view of [page, other]) await expect(view.getByText('Live updates connected', { exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Edit record 1', exact: true }).click();
+    await page.getByLabel('body', { exact: true }).focus();
+    await expect(other.locator('[data-presence-field="body"]')).toBeVisible({ timeout: 3000 });
+    await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await expect(other.locator('[data-presence-field]')).toHaveCount(0, { timeout: 3000 });
+
+    const buffer = Buffer.from(header + '1,1,Original,user@example.com,Shared uploaded body\n1,2,New,new@example.com,New body');
+    await Promise.all([page, other].map(view => view.getByLabel('Choose CSV').setInputFiles({ name: 'shared.csv', mimeType: 'text/csv', buffer })));
+    for (const view of [page, other]) {
+      await expect(view.getByRole('dialog', { name: 'Review record #1' })).toBeVisible();
+      await view.getByRole('radio', { name: 'Alternative 1', exact: true }).check();
+    }
+    const started = Date.now();
+    await page.getByRole('button', { name: 'Apply upload', exact: true }).click();
+    await expect(other.getByRole('dialog', { name: 'Apply upload', exact: true })).toBeVisible({ timeout: Math.max(1, 3000 - (Date.now() - started)) });
+    await expect(other.locator('.body-preview')).toHaveText(['Shared uploaded body', 'New body']);
+    expect((await (await request.get('/api/comments')).json()).total).toBe(2);
+    await other.getByRole('button', { name: 'Reject upload', exact: true }).click();
+    await expect(other.getByRole('dialog')).toHaveCount(0);
+
+    await other.getByRole('button', { name: 'Edit record 1', exact: true }).click();
+    await other.getByLabel('body', { exact: true }).focus();
+    await expect(page.locator('[data-presence-field="body"]')).toBeVisible({ timeout: 3000 });
+    await other.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await expect(page.locator('[data-presence-field]')).toHaveCount(0, { timeout: 3000 });
+  } finally { await other.close(); }
+});
+
 test('a visible session refetches when it regains focus after missing a notification', async ({ page, request }) => {
   await missPushFrames(page);
   await page.goto('/');

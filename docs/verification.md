@@ -8,7 +8,7 @@ Latest application checks: **19 November 2026**, implementation commit **39d71dc
 | --- | --- |
 | Parser suite | 4 passed |
 | Public API/PostgreSQL/WebSocket suite | 27 passed |
-| Chromium browser suite | 37 passed |
+| Chromium browser suite | 38 passed |
 | TypeScript and production Vite build | Passed |
 | Compose configuration validation and app image build | Passed |
 | Recreated Compose app health | ok |
@@ -25,6 +25,12 @@ The API and browser suites ran sequentially against the dedicated comments_test 
 - Staged imports survive a fresh server and database connection and remain safe to apply or reject. A browser regression drops a successful commit response, retries the same request and verifies original-outcome replay without duplicate writes or overwriting a later edit.
 - Import transfer, retry identity, staged choices, navigation/recovery and dialogs now belong to useImportWorkflow. App composes that workflow with browsing/editing; no layout or interaction change was intended.
 - Rebuilt/recreated only the Compose app; PostgreSQL and its volume were retained. Inspected fresh desktop atomic-review and narrow long-alternative screenshots after the extraction.
+
+## Follow-up: tunneled collaboration
+
+A reported two-computer session stopped displaying presence and conflict updates while still showing connected. Fresh sessions passed the presence check on both the local Compose URL and the same development tunnel. The user confirmed that saving drafts and reloading both browsers restored collaboration. The previous browser state was no longer available, so an outdated bundle versus unhealthy connection state was not isolated; no production sync-code fix was applied on that evidence.
+
+Added a two-browser check with both upload comparisons open: one applies, the other receives the accepted values within three seconds, and active-cell presence still appears/clears afterward. The focused test passed twice, then all 38 Chromium tests and the production TypeScript/Vite build passed. Rebuild/reload guidance is in the README and setup guide. These checks saved test data only in comments_test; production browser checks focused/canceled editors without saving data.
 
 ## Limits and historical evidence
 

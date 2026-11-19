@@ -31,7 +31,7 @@ No hard documented coding-standard violations found. Both earlier maintenance co
 
 ## Test completeness
 
-The current suites pass: **4 parser tests, 27 public API/PostgreSQL/WebSocket tests and 37 Chromium tests**. Individual parser tests contain multiple invalid-input assertions, so four test names do not mean four input cases. Tests exercise rollback, controlled concurrency, idempotency, identity reuse, stale edits, competing resolutions, new-ID collisions, batch rejection, missed pushes and presence expiry. The latest atomic imports and required stale-save decisions have direct coverage.
+The current suites pass: **4 parser tests, 27 public API/PostgreSQL/WebSocket tests and 38 Chromium tests**. Individual parser tests contain multiple invalid-input assertions, so four test names do not mean four input cases. Tests exercise rollback, controlled concurrency, idempotency, identity reuse, stale edits, competing resolutions, new-ID collisions, batch rejection, missed pushes and presence expiry. The latest atomic imports and required stale-save decisions have direct coverage.
 
 Added two submission-focused regressions: staged atomic requests survive a fresh server and database connection and remain safe to apply/reject; a browser loses a successful commit response, deliberately retries the identical request, receives the original outcome and leaves a later accepted edit untouched. The latter suppresses background import refreshes during the simulated outage so it specifically exercises manual commit replay.
 

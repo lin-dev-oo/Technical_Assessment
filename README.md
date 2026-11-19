@@ -50,6 +50,8 @@ docker compose up --build -d
 
 Open [localhost:3000](http://localhost:3000) and upload [data.csv](data.csv). Ports 3000 and 5433 need to be free. No .env file is needed for the Docker setup.
 
+After rebuilding the frontend, reload any open app sessions to load the new version. Save your drafts first.
+
 To try collaboration, open the app in two browser windows. Upload the conflicting samples from [docs/demo](docs/demo/README.md). A conflicting file waits for review; Apply upload saves the whole file, while closing the review rejects it.
 
 Useful commands:
