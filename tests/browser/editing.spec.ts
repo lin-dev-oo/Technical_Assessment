@@ -51,8 +51,7 @@ test('preserves a stale draft across refresh and search and requires a deliberat
   await other.getByLabel('Body', { exact: true }).fill('Other accepted body');
   await other.getByRole('button', { name: 'Save', exact: true }).click();
   await expect(other.getByRole('form')).toHaveCount(0);
-  await form.getByRole('button', { name: 'Save', exact: true }).click();
-  await expect(page.getByRole('alert')).toContainText('This comment changed.');
+  await expect(form.getByRole('button', { name: 'Save', exact: true })).toBeDisabled({ timeout: 3000 });
   await expect(page.getByRole('region', { name: 'Current accepted version' })).toContainText('Other accepted body');
   await expect(form.getByRole('button', { name: 'Save', exact: true })).toBeDisabled();
   await page.setViewportSize({ width: 1440, height: 1000 });
@@ -94,8 +93,7 @@ test('preserves a failed draft and blocks it until an incoming conflict is resol
   await expect(page.getByLabel('Body', { exact: true })).toHaveValue('Draft survives errors');
   await page.unroute('**/api/comments/1/edit');
   await request.post('/api/uploads', { headers: { 'x-upload-id': 'pending' }, data: header + '2,1,Alternative,other@example.com,Other body' });
-  await form.getByRole('button', { name: 'Save', exact: true }).click();
-  await expect(page.getByRole('alert')).toContainText('A pending conflict arrived.');
+  await expect(page.getByText('Resolve pending conflicts before saving this draft.', { exact: true })).toBeVisible({ timeout: 3000 });
   await expect(page.getByLabel('Body', { exact: true })).toHaveValue('Draft survives errors');
   await expect(form.getByRole('button', { name: 'Save', exact: true })).toBeDisabled();
   await page.getByRole('button', { name: 'Use current accepted version' }).click();

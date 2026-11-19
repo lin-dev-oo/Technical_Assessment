@@ -162,3 +162,6 @@ th:first-child { width: 125px; }
   .accepted-preview dl { grid-template-columns: minmax(0, 1fr); gap: 14px; }
   .accepted-preview dd { max-height: 160px; }
 }
+
+.connection-status { margin: 0; padding: 0 28px 16px; color: var(--color-secondary-text); font-size: 12px; }
+.connection-status[data-connection="disconnected"] { color: #9a5417; }

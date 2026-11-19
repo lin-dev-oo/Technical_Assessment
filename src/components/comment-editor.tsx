@@ -3,25 +3,37 @@ import type { Comment } from '../hooks/use-comments';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 
-type Review = { accepted: Comment; alternatives: unknown[] };
+type Review = { accepted: Comment; alternatives: unknown[]; proposalRevision: number };
 const fields = [['postId', 'Post ID'], ['name', 'Name'], ['email', 'Email'], ['body', 'Body']] as const;
 
-export function CommentEditor({ initial, current, retained, sessionLabel, onCancel, onSaved, onReview }: {
-  initial: Comment; current?: Comment; retained?: boolean; sessionLabel: string;
+export function CommentEditor({ initial, current, retained, sessionLabel, revision, onCancel, onSaved, onReview }: {
+  initial: Comment; current?: Comment; retained?: boolean; sessionLabel: string; revision: number;
   onCancel: () => void; onSaved: () => void; onReview: () => void;
 }) {
   const [draft, setDraft] = useState({ postId: String(initial.postId), name: initial.name, email: initial.email, body: initial.body });
   const [baseline, setBaseline] = useState(initial);
   const [review, setReview] = useState<Review>();
+  const [remote, setRemote] = useState<Review>();
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [needsBaseline, setNeedsBaseline] = useState(false);
-  const accepted = [baseline, current, review?.accepted].reduce<Comment>((latest, item) => item && item.version >= latest.version ? item : latest, baseline);
-  const conflicted = Boolean(current?.pendingCount || review?.alternatives.length);
+  const snapshots = [baseline, current, ...[review, remote].map(item => item && ({ ...item.accepted, proposalRevision: item.proposalRevision, pendingCount: item.alternatives.length }))];
+  const accepted = snapshots.reduce<Comment>((latest, item) => item && item.version >= latest.version ? item : latest, baseline);
+  const proposals = snapshots.reduce<Comment>((latest, item) => item && item.proposalRevision >= latest.proposalRevision ? item : latest, baseline);
+  const conflicted = proposals.pendingCount > 0;
   const stale = accepted.version !== baseline.version || conflicted || Boolean(review) || needsBaseline;
   useEffect(() => {
-    if (current && (current.pendingCount > 0 || current.version > baseline.version)) setNeedsBaseline(true);
-  }, [current?.pendingCount, current?.version, baseline.version]);
+    if (accepted.version > baseline.version || proposals.proposalRevision > baseline.proposalRevision) setNeedsBaseline(true);
+  }, [accepted.version, proposals.proposalRevision, baseline.version, baseline.proposalRevision]);
+  useEffect(() => {
+    const controller = new AbortController();
+    let active = true;
+    fetch(`/api/comments/${initial.id}/review`, { signal: controller.signal })
+      .then(async response => { if (!response.ok) throw new Error(); return response.json() as Promise<Review>; })
+      .then(result => { if (active) setRemote(result); })
+      .catch(() => { if (active) setError('Could not refresh the accepted version. Check the connection and try again. Your draft is preserved.'); });
+    return () => { active = false; controller.abort(); };
+  }, [initial.id, revision]);
 
   async function save() {
     if (busy || stale) return;

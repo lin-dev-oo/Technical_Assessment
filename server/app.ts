@@ -65,7 +65,7 @@ export async function createApp(pool: Pool) {
       await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
       const { rows: [{ total }] } = await client.query(`SELECT count(*)::integer AS total FROM comments ${filter}`, [query, numericId]);
       const page = Math.min(requestedPage, Math.max(1, Math.ceil(total / pageSize)));
-      const { rows: comments } = await client.query(`SELECT id, "postId", name, email, body, version, (SELECT count(*)::integer FROM alternatives WHERE comment_id = comments.id) AS "pendingCount" FROM comments ${filter} ORDER BY id LIMIT $3 OFFSET $4`, [query, numericId, pageSize, (page - 1) * pageSize]);
+      const { rows: comments } = await client.query(`SELECT id, "postId", name, email, body, version, proposal_revision AS "proposalRevision", (SELECT count(*)::integer FROM alternatives WHERE comment_id = comments.id) AS "pendingCount" FROM comments ${filter} ORDER BY id LIMIT $3 OFFSET $4`, [query, numericId, pageSize, (page - 1) * pageSize]);
       await client.query('COMMIT');
       res.json({ comments, total, page, pageSize });
     } catch (error) { await client.query('ROLLBACK'); throw error; }
@@ -98,9 +98,10 @@ export async function createApp(pool: Pool) {
         else res.status(previous.http_status).json(previous.outcome);
         return;
       }
-      const finish = async (status: number, outcome: object) => {
+      const finish = async (status: number, outcome: object, changedIds: number[] = []) => {
         await client.query('INSERT INTO upload_requests (id, digest, http_status, outcome) VALUES ($1, $2, $3, $4)', [requestId, digest, status, JSON.stringify(outcome)]);
         await client.query('COMMIT');
+        if (changedIds.length) app.emit('committed', changedIds);
         res.status(status).json(outcome);
       };
       if (!parsed.ok) { await finish(422, { status: 'rejected', errors: parsed.errors }); return; }
@@ -112,18 +113,20 @@ export async function createApp(pool: Pool) {
       });
       const fileLabel = uploadLabel(req.get('x-upload-label'));
       const sessionLabel = (req.get('x-session-label') || 'Browser session').slice(0, 80);
+      const changedIds: number[] = [];
       for (const comment of changed) {
         const values = [comment.id, comment.postId, comment.name, comment.email, comment.body];
         const duplicate = await client.query(`SELECT 1 FROM alternatives WHERE comment_id=$1 AND "postId"=$2 AND name=$3 AND email=$4 AND body=$5`, values);
         if (duplicate.rowCount) continue;
         await client.query(`INSERT INTO alternatives (comment_id, "postId", name, email, body, upload_label, session_label) VALUES ($1,$2,$3,$4,$5,$6,$7)`, [...values, fileLabel, sessionLabel]);
         await client.query('UPDATE comments SET proposal_revision=proposal_revision+1 WHERE id=$1', [comment.id]);
+        changedIds.push(comment.id);
       }
       const incoming = parsed.comments.filter(comment => !accepted.has(comment.id));
       await client.query(`INSERT INTO comments (id, "postId", name, email, body, upload_label, session_label)
         SELECT id, "postId", name, email, body, $2, $3 FROM json_to_recordset($1::json)
         AS incoming(id integer, "postId" integer, name text, email text, body text)`, [JSON.stringify(incoming), fileLabel, sessionLabel]);
-      await finish(200, { status: 'completed', inserted: incoming.length, unchanged: parsed.comments.length - incoming.length - changed.length, conflicts: changed.length });
+      await finish(200, { status: 'completed', inserted: incoming.length, unchanged: parsed.comments.length - incoming.length - changed.length, conflicts: changed.length }, [...changedIds, ...incoming.map(comment => comment.id)]);
     } catch (error) { await client.query('ROLLBACK'); throw error; }
     finally { client.release(); }
   });
@@ -164,6 +167,7 @@ export async function createApp(pool: Pool) {
       const saved = await readReview(client, id);
       await client.query('COMMIT');
       res.json({ status: 'saved', review: saved });
+      app.emit('committed', [id]);
     } catch (error) { await client.query('ROLLBACK'); throw error; }
     finally { client.release(); }
   });
@@ -194,6 +198,7 @@ export async function createApp(pool: Pool) {
       const resolved = await readReview(client, id);
       await client.query('COMMIT');
       res.json({ status: 'resolved', review: resolved });
+      app.emit('committed', [id]);
     } catch (error) { await client.query('ROLLBACK'); throw error; }
     finally { client.release(); }
   });

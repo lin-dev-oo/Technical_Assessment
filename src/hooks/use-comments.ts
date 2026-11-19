@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
 
-export type Comment = { id: number; postId: number; name: string; email: string; body: string; version: number; pendingCount: number };
+export type Comment = { id: number; postId: number; name: string; email: string; body: string; version: number; proposalRevision: number; pendingCount: number };
 type Page = { comments: Comment[]; total: number; page: number; pageSize: number };
 
-// refresh is shared by uploads, explicit refresh, and future collaboration notifications.
+// Background refreshes retain the browsing context and cancel superseded snapshots.
 export function useComments() {
   const [query, setQuery] = useState('');
   const [browse, setBrowse] = useState({ query: '', page: 1, pageSize: 25 });

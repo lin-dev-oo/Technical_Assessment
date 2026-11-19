@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { createApp } from '../server/app.js';
 import { Pool } from 'pg';
 import type { AddressInfo } from 'node:net';
+import { WebSocket } from 'ws';
+import { attachRealtime } from '../server/realtime.js';
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error('Set TEST_DATABASE_URL to a dedicated PostgreSQL test database.');
@@ -115,21 +117,69 @@ test('imports accepted comments and retains them after reconnecting the service'
   }
 });
 
-async function withApi(run: (api: { upload: (id: string, csv: string | Buffer) => Promise<Response>; list: (query?: string) => Promise<any>; pool: Pool; request: (path: string, body?: object) => Promise<Response> }) => Promise<void>) {
+async function withApi(run: (api: { eventsUrl: string; upload: (id: string, csv: string | Buffer) => Promise<Response>; list: (query?: string) => Promise<any>; pool: Pool; request: (path: string, body?: object) => Promise<Response> }) => Promise<void>) {
   const pool = new Pool({ connectionString: databaseUrl });
   await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
   const app = await createApp(pool);
   const server = app.listen(0);
+  const stopRealtime = attachRealtime(app, server);
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   try {
     await run({
       pool,
+      eventsUrl: base.replace('http:', 'ws:') + '/api/events',
       request: (path, body) => fetch(`${base}${path}`, body ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : undefined),
       upload: (id, body) => fetch(`${base}/api/uploads`, { method: 'POST', headers: { 'content-type': 'text/csv', 'x-upload-id': id }, body: body as BodyInit }),
       list: async (query = '') => (await fetch(`${base}/api/comments${query}`)).json(),
     });
-  } finally { await new Promise<void>(resolve => server.close(() => resolve())); await pool.end(); }
+  } finally { stopRealtime(); await new Promise<void>(resolve => server.close(() => resolve())); await pool.end(); }
 }
+
+test('notifies sockets only for committed dataset changes, excluding retries, no-ops, rejections and rollbacks', () => withApi(async ({ eventsUrl, upload, request, list, pool }) => {
+  const csv = header + '1,1,Original,user@example.com,Accepted';
+  await upload('seed', csv);
+  const socket = new WebSocket(eventsUrl);
+  await new Promise<void>((resolve, reject) => { socket.once('open', resolve); socket.once('error', reject); });
+  const messages: unknown[] = [];
+  const finalNotification = new Promise<void>((resolve, reject) => {
+    const deadline = setTimeout(() => reject(new Error('Committed notification did not arrive within three seconds.')), 3000);
+    socket.on('message', raw => {
+      const event = JSON.parse(raw.toString()); messages.push(event);
+      if (event.ids?.includes(2)) { clearTimeout(deadline); resolve(); }
+    });
+  });
+  try {
+    assert.equal((await upload('seed', csv)).status, 200);
+    assert.equal((await upload('unchanged', csv)).status, 200);
+    assert.equal((await upload('seed', csv + 'different')).status, 409);
+    assert.equal((await upload('invalid', header + '0,2,A,bad,')).status, 422);
+    await pool.query('ALTER TABLE comments ADD CONSTRAINT notification_failure CHECK (id <> 99)');
+    assert.equal((await upload('rollback', header + '1,1,Original,user@example.com,Alternative\n1,99,A,a@example.com,New')).status, 503);
+    await pool.query('ALTER TABLE comments DROP CONSTRAINT notification_failure');
+    const proposal = header + '1,1,Original,user@example.com,Alternative';
+    await upload('proposal', proposal);
+    await upload('proposal', proposal);
+    await upload('duplicate-proposal', proposal);
+    const draft = { expectedVersion: 1, postId: 1, name: 'Original', email: 'user@example.com', body: 'Edited' };
+    assert.equal((await request('/api/comments/1/edit', draft)).status, 409);
+    const review = await (await request('/api/comments/1/review')).json();
+    const decision = { selected: 'accepted', expectedVersion: 1, expectedProposalRevision: review.proposalRevision };
+    assert.equal((await request('/api/comments/1/resolve', decision)).status, 200);
+    assert.equal((await request('/api/comments/1/resolve', decision)).status, 409);
+    assert.equal((await request('/api/comments/1/edit', draft)).status, 200);
+    assert.equal((await request('/api/comments/1/edit', draft)).status, 409);
+    await upload('final-change', header + '1,2,Final,final@example.com,Done');
+    await finalNotification;
+    assert.deepEqual(messages, [
+      { type: 'changed', ids: [1] }, { type: 'changed', ids: [1] },
+      { type: 'changed', ids: [1] }, { type: 'changed', ids: [2] },
+    ]);
+    const data = await list();
+    assert.equal(data.comments[0].body, 'Edited');
+    assert.equal(data.comments[0].pendingCount, 0);
+    assert.equal(data.comments[1].body, 'Done');
+  } finally { socket.terminate(); }
+}));
 
 test('validates atomically, counts unchanged comments, retains omitted IDs, and stages changed comments while inserting new IDs', () => withApi(async ({ upload, list }) => {
   await upload('seed', header + '1,1,A,a@b.com,One\n1,2,B,b@b.com,Two');

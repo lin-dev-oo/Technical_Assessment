@@ -45,7 +45,6 @@ test('refreshes a stale review and requires a new choice before keeping the acce
   await other.goto('/');
   await other.getByLabel('Choose comments CSV').setInputFiles({ name: 'later.csv', mimeType: 'text/csv', buffer: Buffer.from(header + '1,1,Later,later@example.com,Later body') });
   await expect(other.getByText('Upload complete')).toBeVisible();
-  await dialog.getByRole('button', { name: 'Resolve conflict', exact: true }).click();
   await expect(dialog.getByText('This review changed. Compare the current versions and choose again.')).toBeVisible();
   await expect(dialog.getByText('Pending alternative 2', { exact: true })).toBeVisible();
   await expect(dialog.getByRole('button', { name: 'Resolve conflict', exact: true })).toBeDisabled();

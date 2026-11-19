@@ -7,9 +7,10 @@ type Version = { id: number; postId: number; name: string; email: string; body: 
 type Review = { accepted: Version; alternatives: Version[]; proposalRevision: number };
 const fields = [['postId', 'Post'], ['name', 'Name'], ['email', 'Email'], ['body', 'Comment']] as const;
 
-export function ConflictReview({ id, onClose, onResolved, onRefresh }: { id: number; onClose: () => void; onResolved: () => void; onRefresh: () => void }) {
+export function ConflictReview({ id, revision, onClose, onResolved, onRefresh }: { id: number; revision: number; onClose: () => void; onResolved: () => void; onRefresh: () => void }) {
   const returnFocus = useRef(document.activeElement as HTMLElement | null);
   const [review, setReview] = useState<Review>();
+  const latestReview = useRef<Review>(undefined);
   const [selected, setSelected] = useState<'accepted' | number>();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -17,16 +18,25 @@ export function ConflictReview({ id, onClose, onResolved, onRefresh }: { id: num
   const [stale, setStale] = useState(false);
   const [reload, setReload] = useState(0);
   useEffect(() => {
+    if (saving) return;
     const controller = new AbortController();
     let current = true;
-    setLoading(true); setError(''); setSelected(undefined);
+    if (!latestReview.current) { setLoading(true); setError(''); }
     fetch(`/api/comments/${id}/review`, { signal: controller.signal })
       .then(async response => { if (!response.ok) throw new Error(); return response.json() as Promise<Review>; })
-      .then(result => { if (current) setReview(result); })
+      .then(result => {
+        if (!current) return;
+        const previous = latestReview.current;
+        if (previous && (previous.accepted.version !== result.accepted.version || previous.proposalRevision !== result.proposalRevision)) {
+          setSelected(undefined); setStale(true);
+        }
+        latestReview.current = result;
+        setReview(result); setError(previous => previous.startsWith('Could not load') ? '' : previous);
+      })
       .catch(() => { if (current) setError('Could not load the versions. Try again.'); })
       .finally(() => { if (current) setLoading(false); });
     return () => { current = false; controller.abort(); };
-  }, [id, reload]);
+  }, [id, reload, revision, saving]);
   async function resolve() {
     if (!review || selected === undefined || saving) return;
     setSaving(true); setError('');
@@ -34,7 +44,7 @@ export function ConflictReview({ id, onClose, onResolved, onRefresh }: { id: num
       const response = await fetch(`/api/comments/${id}/resolve`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ selected, expectedVersion: review.accepted.version, expectedProposalRevision: review.proposalRevision }) });
       const result = await response.json();
       if (response.status === 409 && result.status === 'stale_review') {
-        setReview(result.review); setSelected(undefined); setStale(true); onRefresh();
+        latestReview.current = result.review; setReview(result.review); setSelected(undefined); setStale(true); onRefresh();
       } else if (!response.ok) throw new Error();
       else onResolved();
     } catch { setError('Resolution not confirmed. Check the connection and try again.'); }
@@ -45,7 +55,7 @@ export function ConflictReview({ id, onClose, onResolved, onRefresh }: { id: num
     <div className="review-heading"><DialogTitle>Review comment #{id}</DialogTitle><DialogDescription>Compare versions and choose one complete version to keep.</DialogDescription></div>
     {loading ? <div className="review-loading" role="status"><RefreshCw className="animate-spin" size={18}/>Loading versions…</div> : <>
       {stale && <p className="review-notice" role="alert">This review changed. Compare the current versions and choose again.</p>}
-      {error && <div className="feedback error" role="alert"><TriangleAlert size={18}/><div>{error}{!review && <Button variant="outline" size="sm" onClick={() => setReload(value => value + 1)}>Try again</Button>}</div></div>}
+      {error && <div className="feedback error" role="alert"><TriangleAlert size={18}/><div>{error}{error.startsWith('Could not load') && <Button variant="outline" size="sm" onClick={() => setReload(value => value + 1)}>Try again</Button>}</div></div>}
       {review && !!review.alternatives.length && <p className="comparison-hint">Scroll sideways to compare versions.</p>}
       {review && !review.alternatives.length ? <p className="review-notice" role="status">There are no pending alternatives. This conflict has already been resolved.</p> : review && <div className="comparison-scroll" tabIndex={0} role="region" aria-label="Version comparison"><table className="comparison-table"><thead><tr><th scope="col">Field</th>{versions.map((version, index) => {
         const value = index === 0 ? 'accepted' : version.alternativeId!;
