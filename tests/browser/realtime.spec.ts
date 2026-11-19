@@ -11,7 +11,7 @@ test('reconnect refetches missed changes while keeping search, page, draft and f
   await request.post('/api/uploads', { headers: { 'x-upload-id': 'seed' }, data: header + Array.from({ length: 30 }, (_, i) => `1,${i + 1},Name ${i + 1},user@example.com,Body`).join('\n') });
   let offline = false;
   let live: WebSocketRoute;
-  await page.routeWebSocket('**/api/events', socket => {
+  await page.routeWebSocket('**/api/events*', socket => {
     if (offline) { socket.close(); return; }
     live = socket;
     socket.connectToServer();

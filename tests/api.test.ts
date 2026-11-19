@@ -135,6 +135,65 @@ async function withApi(run: (api: { eventsUrl: string; upload: (id: string, csv:
   } finally { stopRealtime(); await new Promise<void>(resolve => server.close(() => resolve())); await pool.end(); }
 }
 
+test('a resumed connection supersedes still-connected activity without duplicate indicators', () => withApi(async ({ eventsUrl }) => {
+  const previous = new WebSocket(eventsUrl);
+  const welcome = await new Promise<any>(resolve => previous.on('message', raw => { const message = JSON.parse(raw.toString()); if (message.type === 'session') resolve(message); }));
+  assert.equal(typeof welcome.resumeToken, 'string');
+  previous.send(JSON.stringify({ type: 'presence', cell: { commentId: 1, field: 'name' } }));
+  const closed = new Promise(resolve => previous.once('close', resolve));
+  const replacement = new WebSocket(`${eventsUrl}?resume=${welcome.resumeToken}`);
+  const updates: any[] = [];
+  replacement.on('message', raw => updates.push(JSON.parse(raw.toString())));
+  try {
+    await new Promise<void>(resolve => replacement.once('open', resolve));
+    await closed;
+    replacement.send(JSON.stringify({ type: 'presence', cell: { commentId: 1, field: 'body' } }));
+    const end = Date.now() + 3000;
+    while (!updates.some(item => item.type === 'presence' && item.sessions.length) && Date.now() < end) await new Promise(resolve => setTimeout(resolve, 10));
+    const active = updates.filter(item => item.type === 'presence' && item.sessions.length);
+    assert.equal(active.length, 1);
+    assert.equal(active[0].sessions.length, 1);
+    assert.equal(active[0].sessions[0].sessionId, welcome.sessionId);
+    assert.equal(active[0].sessions[0].cell.field, 'body');
+    assert.equal('resumeToken' in active[0].sessions[0], false);
+  } finally { previous.terminate(); replacement.terminate(); }
+}));
+
+test('validates temporary presence, assigns identities, and closes flooding sessions without writing comments', () => withApi(async ({ eventsUrl, list }) => {
+  const observer = new WebSocket(eventsUrl);
+  const messages: any[] = [];
+  observer.on('message', raw => messages.push(JSON.parse(raw.toString())));
+  await new Promise<void>(resolve => observer.once('open', resolve));
+  const sender = new WebSocket(eventsUrl);
+  const own: any[] = [];
+  sender.on('message', raw => own.push(JSON.parse(raw.toString())));
+  await new Promise<void>(resolve => sender.once('open', resolve));
+  const waitFor = async (condition: () => boolean) => {
+    const end = Date.now() + 3000;
+    while (!condition() && Date.now() < end) await new Promise(resolve => setTimeout(resolve, 10));
+    assert.ok(condition(), 'Expected protocol outcome within three seconds');
+  };
+  try {
+    await waitFor(() => own.some(item => item.type === 'session') && messages.some(item => item.type === 'session'));
+    const identity = own.find(item => item.type === 'session');
+    assert.notEqual(identity.sessionId, messages.find(item => item.type === 'session').sessionId);
+    assert.notEqual(identity.label, messages.find(item => item.type === 'session').label);
+    assert.notEqual(identity.color, messages.find(item => item.type === 'session').color);
+    for (const cell of [{ commentId: 0, field: 'body' }, { commentId: 1, field: 'id' }, { commentId: 2147483648, field: 'body' }, { commentId: 1.5, field: 'name' }]) sender.send(JSON.stringify({ type: 'presence', cell }));
+    sender.send('{malformed');
+    sender.send(JSON.stringify({ type: 'presence', label: 'Spoof', color: 'red', sessionId: 'spoof', cell: { commentId: 1, field: 'body' } }));
+    await waitFor(() => messages.some(item => item.type === 'presence' && item.sessions.length === 1));
+    const updates = messages.filter(item => item.type === 'presence' && item.sessions.length);
+    assert.equal(updates.length, 1);
+    assert.deepEqual(updates[0].sessions, [{ sessionId: identity.sessionId, label: identity.label, color: identity.color, cell: { commentId: 1, field: 'body' } }]);
+    const closed = new Promise<number>(resolve => sender.once('close', code => resolve(code)));
+    for (let i = 0; i < 100; i++) sender.send(JSON.stringify({ type: 'presence', cell: { commentId: 1, field: 'body' } }));
+    assert.equal(await closed, 1008);
+    await waitFor(() => messages.at(-1)?.type === 'presence' && messages.at(-1).sessions.length === 0);
+    assert.equal((await list()).total, 0);
+  } finally { sender.terminate(); observer.terminate(); }
+}));
+
 test('notifies sockets only for committed dataset changes, excluding retries, no-ops, rejections and rollbacks', () => withApi(async ({ eventsUrl, upload, request, list, pool }) => {
   const csv = header + '1,1,Original,user@example.com,Accepted';
   await upload('seed', csv);
@@ -144,7 +203,7 @@ test('notifies sockets only for committed dataset changes, excluding retries, no
   const finalNotification = new Promise<void>((resolve, reject) => {
     const deadline = setTimeout(() => reject(new Error('Committed notification did not arrive within three seconds.')), 3000);
     socket.on('message', raw => {
-      const event = JSON.parse(raw.toString()); messages.push(event);
+      const event = JSON.parse(raw.toString()); if (event.type === 'changed') messages.push(event);
       if (event.ids?.includes(2)) { clearTimeout(deadline); resolve(); }
     });
   });

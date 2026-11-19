@@ -165,3 +165,6 @@ th:first-child { width: 125px; }
 
 .connection-status { margin: 0; padding: 0 28px 16px; color: var(--color-secondary-text); font-size: 12px; }
 .connection-status[data-connection="disconnected"] { color: #9a5417; }
+
+.cell-presence { display: flex; align-items: center; gap: 5px; width: fit-content; max-width: 100%; margin-top: 8px; padding: 3px 5px; border: 1px dashed #a7c6cd; border-radius: 4px; background: #f1f8fa; color: #355864; font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }
+.cell-presence > span { width: 6px; height: 6px; flex-shrink: 0; border-radius: 50%; }

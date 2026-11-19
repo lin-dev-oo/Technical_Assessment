@@ -2,12 +2,15 @@ import { useEffect, useState } from 'react';
 import type { Comment } from '../hooks/use-comments';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
+import { CellPresence } from './cell-presence';
+import type { Presence } from '../hooks/use-realtime';
 
 type Review = { accepted: Comment; alternatives: unknown[]; proposalRevision: number };
 const fields = [['postId', 'Post ID'], ['name', 'Name'], ['email', 'Email'], ['body', 'Body']] as const;
 
-export function CommentEditor({ initial, current, retained, sessionLabel, revision, onCancel, onSaved, onReview }: {
+export function CommentEditor({ initial, current, retained, sessionLabel, revision, presence, onCancel, onSaved, onReview }: {
   initial: Comment; current?: Comment; retained?: boolean; sessionLabel: string; revision: number;
+  presence: Presence[];
   onCancel: () => void; onSaved: () => void; onReview: () => void;
 }) {
   const [draft, setDraft] = useState({ postId: String(initial.postId), name: initial.name, email: initial.email, body: initial.body });
@@ -71,10 +74,10 @@ export function CommentEditor({ initial, current, retained, sessionLabel, revisi
 
   const formId = `edit-comment-${initial.id}`;
   function field(field: keyof typeof draft, label: string) {
-    const props = { form: formId, disabled: busy, id: `edit-${initial.id}-${field}`, value: draft[field], onChange: (event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => setDraft(value => ({ ...value, [field]: event.target.value })) };
+    const props = { form: formId, disabled: busy, 'data-active-field': field, 'data-comment-id': initial.id, id: `edit-${initial.id}-${field}`, value: draft[field], onChange: (event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => setDraft(value => ({ ...value, [field]: event.target.value })) };
     return <div className="cell-editor"><label className="sr-only" htmlFor={props.id}>{label}</label>{field === 'body'
       ? <textarea {...props}/>
-      : <Input {...props} autoFocus={field === 'postId'} inputMode={field === 'postId' ? 'numeric' : undefined}/>}</div>;
+      : <Input {...props} autoFocus={field === 'postId'} inputMode={field === 'postId' ? 'numeric' : undefined}/>}<CellPresence sessions={presence} commentId={initial.id} field={field}/></div>;
   }
   return <>
     <tr className="editing-row" aria-label={`Editing comment ${initial.id}`}>
