@@ -10,7 +10,7 @@ const fields = ['postId', 'name', 'email', 'body'] as const;
 const differs = (a: CommentValues, b: CommentValues) => fields.some(field => a[field] !== b[field]);
 const key = (id: string) => `import:${id}`;
 
-// Browser imports are staged as request data, never as accepted rows or cell locks.
+// Conflicting files are staged as request data; accepted rows change only on Apply.
 // Stored alternatives from earlier versions are included for conflict recovery.
 export async function attachImports(app: Express, pool: Pool) {
   await pool.query('ALTER TABLE upload_requests ADD COLUMN IF NOT EXISTS draft json');

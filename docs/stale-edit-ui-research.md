@@ -1,5 +1,7 @@
 # Stale edit recovery UI
 
+Historical design research. Product labels and behavior evolved after this research; [current UI direction](ui-design.md) and [the specification](spec.md) define the implemented requirements.
+
 Researched 19 November 2026. Scope: simplify recovery after another session updates a record while this session has an unsaved draft. This is separate from resolving persistent upload alternatives.
 
 ## Established product patterns

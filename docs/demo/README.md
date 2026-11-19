@@ -20,8 +20,8 @@ Counts below are `inserted / unchanged / conflicts requiring review`. Conflictin
 | --- | --- | --- |
 | [Original data.csv](../../data.csv) | Empty database | `500 / 0 / 0`, accepted IDs 1–500 |
 | Original data.csv again | Immediately after first import | `0 / 500 / 0` |
-| [conflicting-a.csv](conflicting-a.csv) | Sample imported, #1 unresolved | `0 / 0 / 1`; #1 body becomes a pending alternative |
-| [conflicting-b.csv](conflicting-b.csv) | Sample imported, #1 unresolved | `0 / 0 / 1`; second distinct alternative, including a quoted comma and actual newline |
+| [conflicting-a.csv](conflicting-a.csv) | Sample imported, #1 unresolved | Review required for #1; no accepted writes before Apply |
+| [conflicting-b.csv](conflicting-b.csv) | Sample imported, #1 unresolved | Separate private review for #1, including a quoted comma and actual newline |
 | [absent-a.csv](absent-a.csv) and [absent-b.csv](absent-b.csv) | #1001 absent | Across the two uploads: one `1 / 0 / 0` and one `0 / 0 / 1`, with either file winning |
 | [invalid-mixed.csv](invalid-mixed.csv) | #1002 and #1003 absent | Whole file rejected; neither ID inserted. Record 3 errors: postId, email and body |
 
@@ -55,7 +55,7 @@ Every bounded file is fully received and validated before its write transaction.
 
 Every mutation uses the same short transaction-level PostgreSQL advisory lock, plus normal constraints and a transaction. Parsing, file transfer and user review occur outside that lock. Concurrent absent-ID uploads therefore serialize classification against current committed data: one inserts, and the next observes it before deciding whether to count unchanged or stage its whole file. Direct value comparisons deduplicate alternatives.
 
-A manual save carries the expected accepted-record version and is rejected if that version changed or conflicts exist. Resolution checks both the accepted-record version and the proposal-set revision atomically. Keeping accepted values still advances the proposal revision, so it invalidates an old review even though the accepted values did not change. No review can dismiss alternatives it has not seen.
+A manual save carries the expected accepted-record version and is rejected if that version changed or stored legacy conflicts exist. Atomic Apply checks the complete file snapshot and both review revisions before committing any row. For existing stored conflicts, resolution checks both revisions and advances the proposal revision even when keeping accepted values, invalidating earlier reviews. No review can dismiss stored alternatives it has not seen.
 
 An upload identity and raw-content digest persist with the original outcome. Retrying the same request and bytes returns that outcome even after later edits or resolutions; different bytes with that identity are rejected. **Retry upload** reuses the browser's retained identity after an uncertain response. Selecting a file again is a new request. Database failure rolls back both mutations and the upload outcome.
 

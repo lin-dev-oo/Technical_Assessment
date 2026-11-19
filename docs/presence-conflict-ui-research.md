@@ -1,5 +1,7 @@
 # Active-cell presence and conflict comparison
 
+Historical design research. Product labels and behavior evolved after this research; [current UI direction](ui-design.md) and [the specification](spec.md) define the implemented requirements.
+
 Research date: 19 November 2026. Scope: existing fixed-schema CSV application (`id`, `postId`, `name`, `email`, `body`), temporary session presence, persistent pending alternatives, and choosing one complete version. No field merge or schema changes.
 
 ## Established patterns (official primary sources)

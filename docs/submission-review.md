@@ -15,7 +15,7 @@ The latest version is ready for the agreed local assessment and interview demo. 
 | Docker Compose | App and PostgreSQL services, healthy database dependency, named volume, automatic schema initialization and production assets/API/WebSockets served by one app. No additional service is required for the new imports. |
 | Setup/demo documentation | Original brief preserved; setup and two-session walkthrough supplied. The single atomic upload protocol and stored-conflict recovery are documented. |
 
-The newest approved behavior deliberately keeps conflicting uploads private until Apply upload. A second session sees committed changes, not another browser's unconfirmed file. Explain this interpretation during the demo, since the original brief's real-time diff wording could otherwise suggest a shared pending-upload viewer. Earlier persistent-proposal decisions in the specification are superseded by its latest section.
+The newest approved behavior deliberately keeps conflicting uploads private until Apply upload. A second session sees committed changes, not another browser's unconfirmed file. Explain this interpretation during the demo, since the original brief's real-time diff wording could otherwise suggest a shared pending-upload viewer. The current specification documents atomic imports and explicitly retires the earlier persistent-proposal upload workflow.
 
 ## Spec review
 

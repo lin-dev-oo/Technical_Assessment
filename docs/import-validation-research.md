@@ -1,5 +1,7 @@
 # CSV import validation research
 
+Design research retained for context. See [the current specification](spec.md) and [setup guide](setup.md) for the implemented atomic upload contract and supported endpoints.
+
 Research date: 2026-11-17. Scope: the three-day assessment in README.md, a small comments dataset, simultaneous overlapping uploads, real-time diffs, and optional manual resolution. Recommendations below are design judgments, not claims that one policy is universally best.
 
 ## What production systems demonstrate

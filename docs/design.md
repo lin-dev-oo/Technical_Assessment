@@ -14,22 +14,22 @@ A focused collaborative CSV application: one shared comments dataset, one table,
 
 - Validate the whole file before dataset changes. Invalid input creates no comments or proposals; show all safely discoverable errors with actionable locations.
 - Match headers case-insensitively in any order; retain canonical display names. Reject missing, unexpected, duplicate, empty, and whitespace-padded headers.
-- Restore the agreed sample-specific validation: positive integer id and postId, nonblank name/email/body, basic email syntax, and no repeated IDs within a file. Preserve text rather than silently trimming content.
+- Apply the fixed-schema validation: positive integer id and postId, nonblank name/email/body, basic email syntax, and no repeated IDs within a file. Preserve text rather than silently trimming content.
 - Limit uploads to 5 MB and 10,000 records; reject empty and header-only files.
-- Show transfer progress separately from processing, then inserted, unchanged, and pending-conflict counts.
+- Show transfer progress separately from processing. Conflicts open review before acceptance; completion reports inserted, updated and unchanged counts.
 - Browser uploads without conflicts insert new IDs immediately. A conflicting file is staged in full until Apply upload commits every choice and new row atomically. Dismissal rejects the whole file. Keep omitted IDs untouched. The sole upload endpoint is /api/imports. The retired /api/uploads route returns 404; existing stored alternatives retain review/resolve recovery.
-- Keep distinct pending alternatives with basic upload/session labels. Compare parsed, validated record values directly to avoid identical alternatives; no elaborate provenance or hashing system.
+- Show the incoming version and any existing stored alternatives with basic upload/session labels. Compare parsed, validated record values directly to avoid identical alternatives; no elaborate provenance or hashing system.
 - Protect against repeated processing of retried upload requests with request identity and stored outcomes. Do not rely solely on record equality.
 
 ## Editing and conflict review
 
 - Edit non-identifier fields using explicit Save/Cancel and expected record versions.
-- Disable editing records with pending conflicts. Preserve any draft begun before a conflict arrived; do not silently submit it as a proposal or discard it.
+- Disable editing records with stored legacy conflicts. Preserve drafts when accepted data or review revisions change; do not silently submit it as a proposal or discard it.
 - Stale Save immediately opens a required Current version/Your version decision. Use my version saves against the displayed current version; Use current version discards the draft. Another concurrent change requires a fresh decision. Show connection/error status and permit retry without losing the draft.
-- Review the accepted record and all distinct pending alternatives together. Choose one whole version, accepting it and rejecting the reviewed alternatives; no field-by-field merge.
-- Resolution checks both accepted-record version and proposal-set revision. If either changed, refresh the comparison and require another decision.
+- Review the accepted record, incoming version and any distinct stored alternatives together. Choose one whole version; staged choices take effect only with Apply upload. Stored-conflict recovery resolves one reviewed legacy set. There is no field-by-field merge.
+- Atomic Apply checks the complete file snapshot and both review revisions. Stored-conflict resolution checks accepted-record version and proposal-set revision. If either changed, refresh the comparison and require another decision.
 - The first valid committed resolution wins. Stale requests cannot reverse it. Later uploads may create new conflicts.
-- Pending proposals survive refreshes and application restarts.
+- Staged request metadata and existing stored alternatives survive service restarts. Dismissing/reloading an active staged browser review rejects the file; choices and unsaved drafts have no durable browser recovery.
 
 ## Interface and collaboration
 
