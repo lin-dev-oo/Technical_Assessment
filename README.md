@@ -38,45 +38,41 @@ In your submission, must include the following:
 - You will be expected to run and demo your application running the docker compose file during the interview.
 - During the demo, two browser tabs/windows should be opened and you will be required to perform the conflicting uploads simultaneously. You must explain every design decision in their conflict resolution strategy.
 
-## Application setup and implementation
+## Running the app
 
-The original assessment above is preserved. This implementation uses React/TypeScript, Node.js/TypeScript and PostgreSQL.
+Built with React, TypeScript, Express and PostgreSQL. Docker Compose runs both the app and database.
 
-### Run with Docker Compose
+With Docker running, from the project root:
 
-Start Docker Desktop with its Linux engine and Docker Compose v2. Run these commands from the repository root, with ports 3000 and 5433 available:
-
-```powershell
+```sh
 docker compose up --build -d
-docker compose ps
-Invoke-RestMethod http://localhost:3000/api/health
 ```
 
-When the health endpoint returns `ok`, open [http://localhost:3000](http://localhost:3000). If startup is still in progress, repeat the health request. Choose **Upload CSV** and select the supplied [data.csv](data.csv). Docker builds the frontend and runs the app and database; no host Node.js installation or `.env` file is required. Initial image/dependency downloads need internet access.
+Open [localhost:3000](http://localhost:3000) and upload [data.csv](data.csv). Ports 3000 and 5433 need to be free. No .env file is needed for the Docker setup.
 
-For collaboration, open a second browser window, preferably private/incognito, at the same address. Conflicting files open a comparison and remain entirely staged until **Apply upload**. **Reject upload** or dismissing that review leaves accepted data untouched. Committed changes appear in the other session within three seconds in the supported local demo.
+To try collaboration, open the app in two browser windows. Upload the conflicting samples from [docs/demo](docs/demo/README.md). A conflicting file waits for review; Apply upload saves the whole file, while closing the review rejects it.
 
-```powershell
-docker compose logs --tail 100 app db
+Useful commands:
+
+```sh
+docker compose logs -f app
 docker compose down
 ```
 
-Stopping with `down` retains the PostgreSQL named volume. `docker compose down -v` deletes that project's stored data; use it only for an intentional reset. Unsaved browser drafts do not survive reload.
+The database is kept between runs. Use `docker compose down -v` to reset it.
 
-### Tests and project guide
+### Tests
 
-Run the parser tests in the built image:
+Parser tests can run in the app container:
 
-```powershell
+```sh
 docker compose run --rm app npm test
 ```
 
-The latest verified suites contain 4 parser tests, 27 API/PostgreSQL/WebSocket tests and 37 Chromium browser tests. API/browser suites require a dedicated database ending in `_test` and reset its schema; follow the [complete test instructions](docs/setup.md#tests) rather than using the application database.
+API and browser tests use a separate PostgreSQL database ending in `_test`. They clear that database between tests. Commands for both suites, plus local development setup, are in [docs/setup.md](docs/setup.md).
 
-- [Setup, development, configuration, API and troubleshooting](docs/setup.md)
-- [Two-session demo and fixture outcomes](docs/demo/README.md)
-- [Architecture and module responsibilities](docs/design.md)
-- [Current specification](docs/spec.md) and [domain glossary](GLOSSARY.md)
-- [Latest verification evidence](docs/verification.md) and [submission review/limitations](docs/submission-review.md)
+### Further reading
 
-The sole upload endpoint is `/api/imports`. `/api/uploads` is retired; existing stored conflicts remain recoverable. The frontend import workflow owns transfer, retries and review state; the backend validates data and enforces transactional and revision checks.
+- [Two-session demo](docs/demo/README.md)
+- [Design and conflict handling](docs/design.md)
+- [Test results and known limitations](docs/verification.md)
