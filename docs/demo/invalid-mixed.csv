@@ -1,0 +1,3 @@
+postId,id,name,email,body
+101,1002,Must not be inserted,valid@example.com,This valid row must roll back with the invalid file
+0,1003,Invalid row,not-an-email,

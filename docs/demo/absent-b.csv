@@ -1,0 +1,3 @@
+postId,id,name,email,body
+101,1001,New comment from B,absent-b@example.com,"Second proposed body for previously absent comment 1001, with a comma
+and an actual second line"

@@ -1,84 +1,83 @@
-# Running Comments
+# Run the assessment
 
-Requires Docker Desktop with its Linux engine running. From the repository root:
+Use Docker Desktop with the Linux engine running and Docker Compose v2. Run commands from the repository root. The Compose application needs no host Node.js installation; the browser tests and optional host development require Node.js 22 and npm. Image builds, npm installation and the first Chromium installation require network access. Ports 3000 and 5433 must be free (3100 is also needed by browser tests).
 
 ```powershell
 docker compose up --build -d
+docker compose ps
+Invoke-RestMethod http://localhost:3000/api/health
 ```
 
-Open http://localhost:3000. The app serves its production React build and HTTP API from one Node.js process. PostgreSQL is on localhost:5433 with local demo credentials `comments` / `comments`, database `comments`. Ports 3000 and 5433 must be free. These credentials are for the local assessment only.
+Open [the application](http://localhost:3000). Wait for the health request to succeed before the demo. PostgreSQL starts before the app; tables are initialized automatically. The app serves its production React build, HTTP API and WebSocket endpoint from one Node.js process.
+
+Compose sets `DATABASE_URL=postgres://comments:comments@db:5432/comments` and `PORT=3000`. Its PostgreSQL service uses local demo credentials `comments` / `comments`, database `comments`, and exposes host port 5433. No `.env` file or external service is required. For a host process, the default database address is `localhost:5433`; the service name `db` works only inside Compose. Update the Compose port mapping if a host port is occupied, and use the mapped port in browser URLs or host database connections.
 
 ```powershell
-docker compose logs -f app
+docker compose logs --tail 100 app db
 docker compose restart app
 docker compose down
 ```
 
-Accepted comments and upload outcomes survive application restarts and `docker compose down` through the named PostgreSQL volume. `docker compose down -v` deliberately deletes this project's database volume; use it only when you want an empty collection.
+Accepted comments, pending alternatives, record/proposal revisions and upload outcomes survive app restarts and `docker compose down` in the named PostgreSQL volume. `docker compose down -v` deliberately deletes that volume; it is optional and is only appropriate when you want to discard this project's demo data and start empty. Unsaved browser drafts are in memory and do not survive a page reload.
 
-## Current slice
-
-Tickets 01–06 provide validated merge uploads, durable retry identities, accepted-comment browsing/search/pagination, persistent conflict review, whole-version resolution, explicit Save/Cancel editing, live synchronization and active-cell presence. Changed existing comments create pending alternatives while accepted values remain visible; new IDs in the same file commit immediately. Omitted IDs remain untouched.
-
-## Demo
-
-1. Open the app. An empty dataset shows a centered **Upload CSV** button; persisted comments open directly in the table.
-2. Click **Upload CSV** and select the supplied `data.csv`. Selecting the file starts its upload immediately. Transfer progress reflects bytes sent; the separate processing state covers validation and saving. Expect **500 inserted, 0 unchanged, 0 pending conflicts** in a fresh database, followed by the table screen.
-3. Inspect the table, use the row chevron to read a complete comment, move between pages and switch between 10, 25 and 50 rows. The default is 25. Search across all accepted names, emails and comment bodies without case sensitivity; numeric terms also match an exact comment ID or post ID. Search changes reset to page one after a 250 ms typing debounce. Clear search restores the full collection. Refresh preserves the query and current page, clamping to the last valid page when needed.
-4. Use **Upload CSV** above the table and select the same file again. Expect **0 inserted, 500 unchanged, 0 pending conflicts**. Omitted IDs are retained when you upload a subset.
-5. Restart the app, reload and verify the collection remains.
-6. Try a file with a new ID plus an invalid record. No new comments should appear; correct all listed record/field errors and choose the corrected file.
-7. Open a second browser window. Confirm **Live updates connected** in both. Upload [conflicting-a.csv](demo/conflicting-a.csv) in one and [conflicting-b.csv](demo/conflicting-b.csv) in the other, simultaneously if desired. Each changes comment #1 from the supplied sample. Both windows load the complete proposal set within three seconds without manual refresh. Its accepted values stay visible, and the row shows a pending-conflict action. Repeating either file creates no duplicate alternative.
-8. Click the row's pending-conflict action. Compare the **Accepted version** with all **Pending alternatives**; changed fields are highlighted. Filename and temporary browser-session labels identify each version. Scroll sideways for more alternatives or on narrow screens. Choose a radio button and **Resolve conflict** to retain the selected whole version and close all reviewed alternatives. Choosing the accepted version rejects the alternatives without changing its values.
-9. For a stale-review demo, open a review and select a version in one window, then upload another distinct version in the other. The open comparison refreshes, clears the outdated selection and requires another choice while keeping the dialog and keyboard focus. Two competing resolutions yield one winner; the other refreshes instead of reversing it. A later upload can create a fresh conflict.
-
-10. Click **Edit** on a comment without pending conflicts. Change postId, name, email or body directly in its table cells, then **Save** or **Cancel**. The comment ID stays immutable. Refreshing, searching and changing pages preserve the in-memory draft. If the edited row falls outside the current results or page, it remains as a labelled draft row until Save or Cancel. Cancel discards it; leaving/reloading the page does not retain drafts.
-11. Start editing the same comment in two windows. Save in one, then try saving the other. Its draft remains beside the current accepted values. Choose **Use current accepted version** deliberately after comparing, then **Save** to submit the preserved draft. If an upload creates a pending conflict, resolve it first; the baseline action checks the server before allowing another save. Connection and validation failures keep the draft for a deliberate retry.
-
-12. Keep a draft or review open, then run `docker compose stop app`. The connection status changes to **Live updates disconnected. Reconnecting…**. Run `docker compose start app`; the browser reconnects and refetches authoritative rows, the retained draft's accepted values and any open review. Search, valid page, unsaved text and focus remain intact. A rejected mutation is never automatically retried. The dedicated browser suite also deliberately suppresses notifications while a separate HTTP client commits changes, then checks recovery without a page refresh.
-
-13. While editing, focus another field and observe its temporary **Session … · editing** label in the other window. Both windows can edit the same cell. Move focus to search or Save/Cancel to clear activity while retaining any draft. Switching away from the window also clears activity. Closing the tab clears its label; suspended heartbeats expire within 13 seconds. Reconnects replace earlier activity without duplicate labels. Session labels and colors indicate temporary activity, not authenticated identities or ownership.
+Follow the [repeatable two-session demo](demo/README.md) for fixture outcomes, concurrency explanation, persistence and timing checks. The original assessment wording remains in [README.md](../README.md), and the supplied [data.csv](../data.csv) is unchanged. The confirmed [specification](spec.md), [glossary](../GLOSSARY.md) and [UI direction](ui-design.md) describe the agreed interpretation.
 
 ## Tests
 
-The tests use the approved seams: pure CSV validation, real HTTP/WebSocket interfaces against PostgreSQL, and focused browser collaboration. No database mocks or React implementation tests are used.
+Tests use the already approved seams: pure CSV validation, public HTTP/WebSocket interfaces against real PostgreSQL, and focused two-browser collaboration. SQL is used for fixture setup, fault injection and synchronization; assertions observe public results. Controlled API races wait until both requests reach the write barrier before releasing the fixture lock, rather than relying on arbitrary sleeps. Browser propagation assertions use one shared three-second deadline for both observers.
+
+Run parser tests in the app image after the startup above:
 
 ```powershell
 docker compose run --rm app npm test
 ```
 
-Create a dedicated test database **once** (an already-existing database error on subsequent runs can be ignored):
+Create a dedicated test database once. If `comments_test` already exists, skip `createdb`:
 
 ```powershell
 docker compose exec db createdb -U comments comments_test
 docker compose run --rm -e TEST_DATABASE_URL=postgres://comments:comments@db:5432/comments_test app npm run test:api
 ```
 
-**API tests reset the public schema of their test database.** The database name must end in `_test`; never supply the application's database. Tests cover validation atomicity, persistence and retry outcomes across service reconnection, unchanged/omitted records, proposal deduplication/persistence, whole-version resolutions, stale reviews, competing resolutions, new alternatives after review, database/proposal rollback and recovery, whole-dataset pagination, upload limits and persistent identity reuse. Controlled concurrency tests hold a fixture database lock until both HTTP requests reach the write barrier, then release it; they do not infer overlap from arbitrary sleeps. SQL is used only for fixture setup, fault injection and synchronization; assertions observe the HTTP API.
+**API and browser tests reset the test database's public schema.** The database name must end in `_test`; never give them the application database. Run these suites sequentially against a shared test database. The API suite covers validation atomicity, rollback/recovery, classification, omitted IDs, persistent/retried outcomes, concurrent absent-ID inserts, stale/blocked edits, alternative deduplication, revision-checked competing resolutions, notification timing and presence protocol safeguards.
 
-For a host development environment with Node.js 22:
+For browser tests, install host dependencies and Chromium, then use the database's host address:
 
 ```powershell
 npm ci
-docker compose up -d db
-npm run dev
-# In a second terminal:
-npm run dev:web
-```
-
-The Vite development frontend is on http://localhost:5173 and proxies `/api` to the Node server on port 3000. Stop the Compose app before starting the host server on that same port. `npm run build` checks TypeScript and creates the production browser bundle.
-
-## Focused browser tests
-
-After installing host dependencies, install the Chromium test browser once:
-
-```powershell
 npx playwright install chromium
 $env:TEST_DATABASE_URL = 'postgres://comments:comments@127.0.0.1:5433/comments_test'
 npm run test:browser
 ```
 
-The browser suite builds the app and starts a separate HTTP server on port 3100. It resets the dedicated test database schema, then seeds comments through the API. Run it separately from API tests against the same database. It covers search beyond the visible page, page sizes and reset, empty results, refresh retaining context, clamping after accepted data stops matching, a controlled delayed response from a superseded query, grouped version comparisons and highlights, whole-version selection, stale-review refresh in two browser windows, keyboard dismissal/focus restoration, network-failure choice preservation, and supplied-sample/long-content layouts at 1440px and 390px. SQL only sets up the simulated accepted edit; assertions use the browser. API tests also cover filtered totals, page boundaries, empty results, literal text and exact numeric search.
+The browser command first checks TypeScript and builds production assets, then starts its own HTTP/WebSocket server on port 3100. Compose can continue serving port 3000. Tests cover search/pagination, obsolete responses, grouped conflict comparisons, concurrent uploads/edits/resolutions, preserved drafts and focus, reconnect/refetch, notification delivery within three seconds, and active-cell presence movement/expiry. Screenshot creation does not by itself establish visual inspection. `npm run build` independently checks TypeScript and produces the frontend bundle.
+
+## Optional host development
+
+With Node.js 22 and host dependencies installed:
+
+```powershell
+docker compose up -d db
+docker compose stop app
+npm run dev
+# In a second terminal:
+npm run dev:web
+```
+
+Open [the Vite frontend](http://localhost:5173). It proxies HTTP and WebSockets under `/api` to the backend on port 3000. Optional backend environment variables are `DATABASE_URL` and `PORT`; changing the backend port also requires updating the Vite proxy in `vite.config.ts`. Stop the host server before restarting the Compose app on port 3000.
+
+## Troubleshooting
+
+- If Docker cannot connect or reports an incompatible image platform, start Docker Desktop and select its Linux engine. If the first build fails during downloads, check network access and repeat `docker compose up --build -d`.
+- For a port allocation error, stop the process using that port or change the relevant host mapping. For startup/database failures, inspect `docker compose ps` and `docker compose logs --tail 100 app db`, then retry the health request. Rebuild after source changes.
+- Existing data after `down` is expected. Use an isolated Compose project for a clean demo, as described in the demo guide; avoid deleting a database you want to keep.
+- If Chromium is missing, rerun `npx playwright install chromium` after `npm ci`. A busy port 3100 prevents the browser test server from starting. If a test database is missing, run the `createdb` command above; if authentication fails, check whether an existing volume was initialized with different credentials.
+- **Live updates disconnected. Reconnecting…** indicates an unavailable WebSocket connection. Restart the app and wait for **Live updates connected**. Browsers refetch after reconnect; failed mutations need a deliberate retry. Proxy deployments must forward WebSocket upgrades (the local Compose demo needs no proxy configuration).
+- A rejected CSV reports actionable file/record/field errors. Correct the file and select it again; no part of a rejected file is imported. Search only includes accepted values, so text found solely in a pending alternative will not match.
+
+## Scope boundaries
+
+One shared fixed-schema dataset (`postId,id,name,email,body`), one backend instance and one PostgreSQL database are supported. Temporary session labels are not authentication or authorization. Presence advises about active cells and never locks them. There is no auto-save, schema editing, replacement upload/deletion of omitted records, field-by-field merge, durable draft recovery, offline synchronization or distributed event/presence fanout. Choose one complete accepted/pending version when resolving a conflict.
 
 ## Data and concurrency decisions
 
@@ -106,25 +105,7 @@ The browser suite builds the app and starts a separate HTTP server on port 3100.
 
 The frontend uses shadcn/ui Button, Input, Progress and Dialog components with Radix primitives, styled with shared purple/neutral tokens. Long values have a full-content row expansion and the table scrolls deliberately on narrow screens. Visual verification is recorded separately after inspecting the running application.
 
-## Verification notes
 
-The simplified upload/table flow was verified against a separate empty PostgreSQL database: only the centered Upload CSV action is initially visible, invalid selection displays actionable errors, and selecting the supplied CSV uploads immediately and transitions to the 500-comment table. Reloading opens directly to that table. Uploading from the table returns unchanged counts for the same sample. The table and upload action remain usable at 390px without page overflow. The existing application database was preserved during the empty-state check.
+## Verification records
 
-The running Compose app was inspected at 1440px desktop and 390px narrow widths with the supplied 500-comment sample and a challenging long-name/email/multiline/unbroken-body fixture. Empty, successful import, validation rejection, changed-comment rejection, expanded full content, row navigation and keyboard focus were inspected. Restarting the Compose app and reloading retained all 501 accepted comments from that demo. Follow-up inspection confirmed that choosing `data.csv` again permits a second import and reports 0 inserted, 500 unchanged. At the 390px narrow viewport, the document scroll width was 375px with no page overflow. Stopping the app produced the network-error state; after restart, Retry import returned the original outcome of 0 inserted, 500 unchanged. File transfer and processing completed too quickly to visually inspect separately, so those two states are not claimed as separately visually verified.
-
-The final automated run passed four parser tests, six public HTTP/PostgreSQL tests and the production TypeScript/Vite build. Runtime dependency audit reports no known advisories. The development-only Vite globbing dependency chain currently reports a picomatch advisory without a patched version in the audit data; it is not part of the served runtime request path.
-
-Ticket 02 verification: 4 parser tests, 7 public HTTP/PostgreSQL tests, 3 Chromium browser tests and the production build passed. Standards and spec reviews found no actionable issues. The Compose UI was visually inspected with the supplied 500-comment sample at 1440px and 390px: populated search, empty results and recovery, keyboard focus, page navigation and refresh all worked. No document overflow at 390px; the mobile empty message was corrected to remain outside horizontal table scrolling. A new challenging-content fixture was not visually retested in this slice.
-
-
-Ticket 03 automated verification: 10 public HTTP/PostgreSQL tests and 7 Chromium browser tests pass, together with the production TypeScript/Vite build. Browser tests save comparison screenshots for desktop and narrow viewports, including supplied sample data and three alternatives with long name/email/unbroken multiline body values. Visual inspection is recorded by the reviewing agent separately; screenshot generation alone is not a claim of visual verification. Real-time notifications, editing and presence remain dependent work.
-
-Ticket 03 visual/review verification: inspected generated Chromium screenshots of the supplied sample and several long alternatives at 1440px and 390px. Comparison labels, changed fields, purple whole-version selection, mobile scrolling and footer actions were readable. Focus restoration, failed-resolution selection preservation and stale-review recovery also passed browser checks. Standards and spec reviews each reported zero actionable findings. Four parser tests passed as part of the final run.
-
-Ticket 04 verification: 4 parser tests, 13 HTTP/PostgreSQL tests, 11 Chromium browser tests and the production build pass. Edits occur directly in table cells with row Save/Cancel. Two-browser stale saves, incoming conflicts, validation and transport errors preserve drafts; retaining accepted values during resolution still requires deliberate reconciliation. Desktop and 390px screenshots were visually inspected, including long multiline drafts and both horizontal scroll positions. Mobile recovery feedback remains within the viewport. Standards review's mobile readability finding was fixed and verified; spec review found no issues. WebSocket synchronization and presence remain subsequent tickets.
-
-Ticket 05 verification: 4 parser tests, 14 HTTP/PostgreSQL/WebSocket tests, 16 Chromium browser tests and the production build pass. Controlled browser races supplement the existing API write-barrier checks for absent-ID uploads, competing saves and competing resolutions. Propagation assertions share one three-second deadline starting before uploads or write-barrier release, checking both observers concurrently. Ordered public WebSocket frames verify only committed changes are announced, excluding rejected, retried, unchanged and rolled-back operations. Reconnect tests suppress notifications during an HTTP edit, then verify authoritative recovery with retained search/page/draft/focus. Off-search drafts also receive current accepted data.
-
-Rebuilt and started Docker Compose, then checked two independent Chromium sessions against port 3000: competing uploads became visible in both in 102 ms and resolution refreshed the other open review in 126 ms (measured from before each mutation). This smoke test added and resolved demo comment #1052357570, retaining the existing dataset. Inspected actual Compose live status and resolved table at 1440px and 390px, plus disconnected desktop/narrow draft states and the dynamically refreshed review from test screenshots. Status text, controls and recovery feedback remain readable. Active-cell presence remains ticket 06.
-
-Ticket 06 verification: 4 parser tests, 16 public HTTP/PostgreSQL/WebSocket tests, 18 Chromium browser tests and the production build pass. Two-browser checks cover focus movement, retained inactive drafts, simultaneous editing, disconnect, bounded heartbeat expiry, reconnect and authoritative conflict rejection. Socket protocol tests validate malformed input, ignored identity spoofing, rate limits and replacement of a still-connected session. Rebuilt Compose and verified two-session focus, simulated window blur/focus and Cancel without persisting edits. Inspected Compose viewing cells and simultaneous inline-editor screenshots at 1440px and 390px; subtle dashed activity labels remain distinct from purple keyboard focus. Native OS window switching was not separately inspected.
+Prior slice evidence is retained in [verification-history.md](verification-history.md). See [final assessment-demo verification](verification.md) for the clean startup, assembled suites and two-session Compose checks; historical counts are not a substitute for that run.
