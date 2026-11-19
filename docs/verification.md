@@ -2,6 +2,8 @@
 
 ## Submission review of the latest working version — 19 November 2026
 
+Follow-up test hardening: all **27 API/PostgreSQL/WebSocket tests and 37 Chromium tests** pass; the browser command also passes the production TypeScript/Vite build. New coverage recreates the HTTP app and database pool before applying/rejecting staged imports. A browser regression lets the real server commit, drops that response, then retries the same request and verifies the stored original outcome without duplicate writes or overwriting an intervening edit. These checks use only comments_test; application behavior and deployment configuration are unchanged. The four parser tests were unchanged from the preceding passing run.
+
 Reviewed the original brief, latest confirmed scope, UI direction, complete upload/edit/review/recovery flows, Compose packaging and current test cases. See [submission review](submission-review.md) for requirement mapping, weaknesses and remaining test gaps.
 
 Current checks passed: 4 parser tests, 26 API/PostgreSQL/WebSocket tests, 36 Chromium browser tests, TypeScript/Vite build, Compose configuration validation and Compose image build. The API/browser suites ran sequentially against comments_test. Deliberate database constraint failures exercised rollback and passed their assertions.

@@ -118,6 +118,43 @@ test('imports accepted comments and retains them after reconnecting the service'
   }
 });
 
+test('staged atomic imports survive service restart and remain safe to apply or reject', async () => {
+  let pool = new Pool({ connectionString: databaseUrl });
+  await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
+  let server = (await createApp(pool)).listen(0);
+  let base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const post = (path: string, data: object) => fetch(base + path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(data) });
+  const importFile = (id: string, body: string) => fetch(base + '/api/imports', { method: 'POST', headers: { 'x-upload-id': id }, body });
+  const list = async () => (await fetch(base + '/api/comments')).json();
+  try {
+    assert.equal((await importFile('restart-seed', header + '1,1,A,a@example.com,Original')).status, 200);
+    const csv = header + '1,1,A,a@example.com,Imported\n1,2,B,b@example.com,New';
+    const staged = await (await importFile('restart-apply', csv)).json();
+    await importFile('restart-reject', header + '1,1,A,a@example.com,Rejected\n1,3,C,c@example.com,Must stay absent');
+    const before = await list();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    await pool.end();
+    pool = new Pool({ connectionString: databaseUrl });
+    server = (await createApp(pool)).listen(0);
+    base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+
+    assert.deepEqual(await list(), before);
+    assert.deepEqual(await (await importFile('restart-apply', csv)).json(), staged);
+    assert.deepEqual(await (await post('/api/imports/restart-apply/refresh', {})).json(), staged);
+    assert.equal((await (await post('/api/imports/restart-reject/reject', {})).json()).status, 'rejected_upload');
+    assert.deepEqual(await list(), before);
+    const choices = { choices: [{ id: 1, selected: 0, expectedVersion: 1, expectedProposalRevision: 0 }] };
+    const applied = await (await post('/api/imports/restart-apply/commit', choices)).json();
+    assert.deepEqual(applied, { status: 'completed', inserted: 1, updated: 1, unchanged: 0, conflicts: 0 });
+    assert.deepEqual(await (await post('/api/imports/restart-apply/commit', choices)).json(), applied);
+    assert.equal((await (await post('/api/imports/restart-reject/commit', choices)).json()).status, 'rejected_upload');
+    assert.deepEqual((await list()).comments.map((row: any) => [row.id, row.body, row.version]), [[1, 'Imported', 2], [2, 'New', 1]]);
+  } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    await pool.end();
+  }
+});
+
 async function withApi(run: (api: { eventsUrl: string; importFile: (id: string, csv: string) => Promise<Response>; upload: (id: string, csv: string | Buffer) => Promise<Response>; list: (query?: string) => Promise<any>; pool: Pool; request: (path: string, body?: object) => Promise<Response> }) => Promise<void>) {
   const pool = new Pool({ connectionString: databaseUrl });
   await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');

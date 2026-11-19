@@ -141,6 +141,41 @@ test('conflicts disappearing at Apply require renewed confirmation before insert
   expect((await (await request.get('/api/comments')).json()).total).toBe(2);
 });
 
+test('retries a lost successful commit response without repeating writes or overwriting later edits', async ({ page, request }) => {
+  await page.goto('/');
+  await page.getByLabel('Choose CSV').setInputFiles({ name: 'lost-response.csv', mimeType: 'text/csv', buffer: Buffer.from(header + '1,1,Original,user@example.com,Imported body\n1,2,New,new@example.com,New body') });
+  const dialog = page.getByRole('dialog', { name: 'Review record #1' });
+  await expect(dialog).toBeVisible();
+  await page.waitForLoadState('networkidle');
+  await dialog.getByRole('radio', { name: 'Alternative 1' }).check();
+  // Simulate a connection outage after the server commits, including background recovery.
+  await page.route('**/api/imports/*/refresh', route => route.abort());
+  const attempts: { url: string; body: string | null }[] = [];
+  const outcomes: unknown[] = [];
+  await page.route('**/api/imports/*/commit', async route => {
+    attempts.push({ url: route.request().url(), body: route.request().postData() });
+    const response = await route.fetch();
+    expect(response.ok()).toBeTruthy();
+    outcomes.push(await response.json());
+    if (attempts.length === 1) await route.abort('connectionreset');
+    else await route.fulfill({ response });
+  });
+  await dialog.getByRole('button', { name: 'Apply upload', exact: true }).click();
+  await expect(page.getByText('Upload not confirmed.', { exact: true })).toBeVisible();
+  await expect(dialog.getByRole('radio', { name: 'Alternative 1' })).toBeChecked();
+  const committed = await (await request.get('/api/comments')).json();
+  expect(committed.comments.map((row: any) => [row.id, row.body, row.version])).toEqual([[1, 'Imported body', 2], [2, 'New body', 1]]);
+  expect((await request.post('/api/comments/1/edit', { data: { expectedVersion: 2, postId: 1, name: 'Original', email: 'user@example.com', body: 'Later edit' } })).ok()).toBeTruthy();
+  const beforeRetry = await (await request.get('/api/comments')).json();
+  await dialog.getByRole('button', { name: 'Apply upload', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByText('Upload complete', { exact: true })).toBeVisible();
+  expect(attempts).toHaveLength(2);
+  expect(attempts[1]).toEqual(attempts[0]);
+  expect(outcomes[1]).toEqual(outcomes[0]);
+  expect(await (await request.get('/api/comments')).json()).toEqual(beforeRetry);
+});
+
 test('live conflict removal still requires Apply upload before adding new records', async ({ page, request }) => {
   await page.goto('/');
   await page.getByLabel('Choose CSV').setInputFiles({ name: 'ready.csv', mimeType: 'text/csv', buffer: Buffer.from(header + '1,1,Original,user@example.com,Matching proposal\n1,2,New,new@example.com,New body') });

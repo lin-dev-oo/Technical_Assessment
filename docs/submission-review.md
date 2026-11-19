@@ -31,16 +31,16 @@ No hard documented coding-standard violations found. Two maintenance judgments r
 
 ## Test completeness
 
-The current suites pass: **4 parser tests, 26 public API/PostgreSQL/WebSocket tests and 36 Chromium tests**. Individual parser tests contain multiple invalid-input assertions, so four test names do not mean four input cases. Tests exercise rollback, controlled concurrency, idempotency, identity reuse, stale edits, competing resolutions, new-ID collisions, batch rejection, missed pushes and presence expiry. The latest atomic imports and required stale-save decisions have direct coverage.
+The current suites pass: **4 parser tests, 27 public API/PostgreSQL/WebSocket tests and 37 Chromium tests**. Individual parser tests contain multiple invalid-input assertions, so four test names do not mean four input cases. Tests exercise rollback, controlled concurrency, idempotency, identity reuse, stale edits, competing resolutions, new-ID collisions, batch rejection, missed pushes and presence expiry. The latest atomic imports and required stale-save decisions have direct coverage.
+
+Added two submission-focused regressions: staged atomic requests survive a fresh server and database connection and remain safe to apply/reject; a browser loses a successful commit response, deliberately retries the identical request, receives the original outcome and leaves a later accepted edit untouched. The latter suppresses background import refreshes during the simulated outage so it specifically exercises manual commit replay.
 
 Coverage is substantial but not exhaustive. Prioritize these additions after submission preparation:
 
-1. Staged atomic import across a service restart, followed by apply/reject; existing restart coverage concerns accepted rows and legacy alternatives.
-2. Lost HTTP response after successful atomic commit, then browser retry with the same identity; API terminal replay is covered, but the full transport-loss scenario is not.
-3. Open socket that stops acknowledging heartbeats, proving HTTP fallback; missed changed/presence frames and reconnect are covered.
-4. A further accepted edit while the required stale-save dialog is already open.
-5. Successful exact 5 MiB and 10,000-record boundaries; over-limit rejection and numeric storage boundaries are covered.
-6. Firefox/WebKit and formal accessibility checks; present browser evidence is Chromium plus desktop/narrow screenshots and keyboard assertions.
+1. Open socket that stops acknowledging heartbeats, proving HTTP fallback; missed changed/presence frames and reconnect are covered.
+2. A further accepted edit while the required stale-save dialog is already open.
+3. Successful exact 5 MiB and 10,000-record boundaries; over-limit rejection and numeric storage boundaries are covered.
+4. Firefox/WebKit and formal accessibility checks; present browser evidence is Chromium plus desktop/narrow screenshots and keyboard assertions.
 
 ## Docker and remaining weaknesses
 
