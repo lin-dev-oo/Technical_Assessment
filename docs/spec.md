@@ -1,3 +1,11 @@
+## Latest confirmed upload and recovery behavior (19 November 2026)
+
+This section supersedes the earlier partial-import/persistent-proposal browser workflow below. A browser upload containing any conflicting record is held in its entirety outside the accepted table. New IDs and conflict choices remain unsaved until every conflict has a confirmed choice and the user applies the upload. Closing, Escape, outside dismissal, or Reject upload rejects that entire staged file. The server applies all accepted choices and new rows in one transaction, checks the complete accepted snapshot and each reviewed version, and preserves original outcomes for retries. Other sessions may continue editing while a file is staged; later changes require renewed review. Files with no conflicts still import immediately. Existing legacy merge-API outcomes and persistent alternatives are retained for compatibility; the browser uses the new atomic /api/imports protocol.
+
+Use a single clear control inside Search, themed Sonner notifications for transient feedback, and First/Previous/direct-page/Next/Last pagination. Review changes remains available before saving a stale draft. Saving a stale draft immediately opens a required comparison of Current version and Your version: Use my version saves against the version shown; Use current version discards the local draft. Neither Escape nor outside dismissal bypasses this decision. A further concurrent change refreshes the comparison instead of overwriting it.
+
+Live updates recover missed change and presence messages through acknowledged heartbeat snapshots, refresh on return to the app, and fall back to HTTP refresh when the socket is unresponsive. Open upload comparisons refresh their current values and invalidate choices tied to older revisions. If another session removes all conflicts, applying the remaining upload still requires explicit confirmation.
+
 ## Problem Statement
 
 Users need to import, inspect, search, and edit a shared collection of comments from CSV files while another browser session is working on the same data. Concurrent uploads and edits must not silently overwrite accepted values. Users need an understandable comparison of competing versions and confidence that decisions propagate to both sessions within three seconds.

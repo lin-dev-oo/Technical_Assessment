@@ -13,6 +13,7 @@ export function attachRealtime(app: Express, server: Server) {
   const sockets = new WebSocketServer({ server, path: '/api/events', maxPayload: 1024 });
   const alive = new Set<WebSocket>();
   let sequence = 0;
+  let revision = randomUUID();
   const resumable = new Map<string, WebSocket>();
   const resumeTokens = new Map<WebSocket, string>();
   const sessions = new Map<WebSocket, { sessionId: string; label: string; color: string; cell: { commentId: number; field: string } | null; seen: number }>();
@@ -58,6 +59,9 @@ export function attachRealtime(app: Express, server: Server) {
         const changed = JSON.stringify(next) !== JSON.stringify(session.cell);
         session.cell = next; session.seen = now;
         if (changed) publishPresence();
+        // Every heartbeat returns an authoritative snapshot, so a missed push
+        // cannot leave either data or another editor's activity stale forever.
+        send(socket, JSON.stringify({ type: 'sync', revision, sessions: [...sessions.values()].filter(item => item.cell).map(({ seen: _, ...item }) => item) }));
       } catch { /* Malformed presence has no effect on shared data or activity. */ }
     });
     alive.add(socket);
@@ -70,6 +74,7 @@ export function attachRealtime(app: Express, server: Server) {
     socket.on('error', () => socket.terminate());
   });
   const notify = (ids: number[]) => {
+    revision = randomUUID();
     const message = JSON.stringify({ type: 'changed', ids });
     for (const socket of sockets.clients) send(socket, message);
   };

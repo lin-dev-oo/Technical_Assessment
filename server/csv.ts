@@ -34,7 +34,7 @@ export function parseUpload(content: Buffer): ParsedUpload {
     const detail = error as { records?: number };
     return { ok: false, errors: [{ record: (detail.records ?? 0) + 1, message: 'Malformed CSV. Check quoted fields and escaped quotation marks near this record.' }] };
   }
-  if (!rows.length) return { ok: false, errors: [{ message: 'The file is empty. Include the five headers and at least one comment.' }] };
+  if (!rows.length) return { ok: false, errors: [{ message: 'The file is empty. Include the five headers and at least one record.' }] };
   const originalHeaders = rows.shift()!;
   const headers = originalHeaders.map(h => h.toLowerCase());
   const expected = fields.map(field => field.toLowerCase());
@@ -48,8 +48,8 @@ export function parseUpload(content: Buffer): ParsedUpload {
     if (headers.indexOf(header.toLowerCase()) !== index) errors.push({ record: 1, message: `Duplicate header: ${header}.` });
   });
   if (errors.length) return { ok: false, errors };
-  if (!rows.length) return { ok: false, errors: [{ message: 'The file has headers but no comments.' }] };
-  if (rows.length > 10000) return { ok: false, errors: [{ message: 'The file exceeds the 10,000 comment limit.' }] };
+  if (!rows.length) return { ok: false, errors: [{ message: 'The file has headers but no records.' }] };
+  if (rows.length > 10000) return { ok: false, errors: [{ message: 'The file exceeds the 10,000 record limit.' }] };
   const seen = new Set<number>();
   const comments: CommentValues[] = [];
   rows.forEach((row, index) => {

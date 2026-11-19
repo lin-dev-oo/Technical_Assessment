@@ -17,7 +17,7 @@ A focused collaborative CSV application: one shared comments dataset, one table,
 - Restore the agreed sample-specific validation: positive integer id and postId, nonblank name/email/body, basic email syntax, and no repeated IDs within a file. Preserve text rather than silently trimming content.
 - Limit uploads to 5 MB and 10,000 records; reject empty and header-only files.
 - Show transfer progress separately from processing, then inserted, unchanged, and pending-conflict counts.
-- Insert new IDs, count identical accepted records as unchanged, and create persistent proposals for differing existing records. Keep omitted IDs and current accepted values untouched.
+- Browser uploads without conflicts insert new IDs immediately. A conflicting file is staged in full until Apply upload commits every choice and new row atomically. Dismissal rejects the whole file. Keep omitted IDs untouched. Persistent proposals belong to the compatible legacy /api/uploads endpoint.
 - Keep distinct pending alternatives with basic upload/session labels. Compare parsed, validated record values directly to avoid identical alternatives; no elaborate provenance or hashing system.
 - Protect against repeated processing of retried upload requests with request identity and stored outcomes. Do not rely solely on record equality.
 
@@ -25,7 +25,7 @@ A focused collaborative CSV application: one shared comments dataset, one table,
 
 - Edit non-identifier fields using explicit Save/Cancel and expected record versions.
 - Disable editing records with pending conflicts. Preserve any draft begun before a conflict arrived; do not silently submit it as a proposal or discard it.
-- On stale saves, preserve the draft, show the current data, and require deliberate retry/review. Show connection/error status and permit retry without losing the draft.
+- Stale Save immediately opens a required Current version/Your version decision. Use my version saves against the displayed current version; Use current version discards the draft. Another concurrent change requires a fresh decision. Show connection/error status and permit retry without losing the draft.
 - Review the accepted record and all distinct pending alternatives together. Choose one whole version, accepting it and rejecting the reviewed alternatives; no field-by-field merge.
 - Resolution checks both accepted-record version and proposal-set revision. If either changed, refresh the comparison and require another decision.
 - The first valid committed resolution wins. Stale requests cannot reverse it. Later uploads may create new conflicts.
@@ -46,7 +46,7 @@ A focused collaborative CSV application: one shared comments dataset, one table,
 
 - Use database transactions, a unique/primary-key constraint on id, and short dataset-level write locks shared by all mutation paths.
 - Never hold locks while uploading/parsing files or awaiting user input. Classify against current database state inside the write transaction.
-- If two uploads introduce different values for the same absent ID, the first inserts it and the second creates a proposal rather than overwriting it.
+- If two browser uploads introduce different values for the same absent ID, the first inserts it and the second stages its conflicting file rather than overwriting it.
 - Publish change notifications only after commits. Presence is temporary and separate from persisted data.
 
 ## Verification and delivery
@@ -57,4 +57,4 @@ A focused collaborative CSV application: one shared comments dataset, one table,
 
 ## Status
 
-The user confirmed the focused scope and authorized implementation, retaining active-cell presence. No application code has been written. A formal specification now captures the agreed scope and confirmed test boundaries.
+The application is implemented. The latest section of docs/spec.md takes precedence over historical decisions. See docs/verification.md for actual checks and limitations.

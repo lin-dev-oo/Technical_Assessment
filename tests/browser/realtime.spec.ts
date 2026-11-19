@@ -21,9 +21,9 @@ test('reconnect refetches missed changes while keeping search, page, draft and f
   await page.getByRole('searchbox').fill('Name');
   await page.getByLabel('Rows per page').selectOption('10');
   await page.getByRole('button', { name: 'Next page' }).click();
-  await expect(page.getByText('11–20 of 30 comments')).toBeVisible();
-  await page.getByRole('button', { name: 'Edit comment 11', exact: true }).click();
-  const draft = page.getByLabel('Body', { exact: true });
+  await expect(page.getByText('11–20 of 30 matching records')).toBeVisible();
+  await page.getByRole('button', { name: 'Edit record 11', exact: true }).click();
+  const draft = page.getByLabel('body', { exact: true });
   await draft.fill('Preserved offline draft');
   offline = true;
   live!.close();
@@ -34,49 +34,44 @@ test('reconnect refetches missed changes while keeping search, page, draft and f
   await request.post('/api/comments/11/edit', { data: { expectedVersion: 1, postId: 1, name: 'Name 11', email: 'user@example.com', body: 'Saved while disconnected' } });
   offline = false;
   await expect(page.getByText('Live updates connected', { exact: true })).toBeVisible({ timeout: 3000 });
-  await expect(page.getByRole('region', { name: 'Current accepted version', exact: true })).toContainText('Saved while disconnected', { timeout: 3000 });
+  await expect(page.getByRole('button', { name: 'Review changes', exact: true })).toBeVisible({ timeout: 3000 });
   await expect(draft).toHaveValue('Preserved offline draft');
   await expect(draft).toBeFocused();
   await expect(page.getByRole('searchbox')).toHaveValue('Name');
-  await expect(page.getByText('11–20 of 30 comments')).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Save', exact: true })).toBeDisabled();
+  await expect(page.getByText('11–20 of 30 matching records')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Save', exact: true })).toHaveAttribute('title', 'Resolve changes before saving');
 });
 
-test('two browsers see conflicting uploads for a previously absent ID within three seconds', async ({ page, browser }) => {
+test('a conflicting upload stays private until the complete import is applied', async ({ page, browser, request }) => {
+  await request.post('/api/uploads', { headers: { 'x-upload-id': 'seed' }, data: header + '1,1,First,first@example.com,First body' });
   const other = await browser.newPage();
   await Promise.all([page.goto('/'), other.goto('/')]);
+  await page.getByLabel('Choose CSV').setInputFiles({ name: 'second.csv', mimeType: 'text/csv', buffer: Buffer.from(header + '2,1,Second,second@example.com,Second body') });
+  await expect(page.getByRole('dialog')).toBeVisible();
+  await expect(other.getByRole('dialog')).toHaveCount(0);
+  await expect(other.locator('.body-preview')).toHaveText('First body');
+  await page.getByRole('radio', { name: 'Alternative 1' }).check();
   const started = Date.now();
-  await Promise.all([
-    page.getByLabel('Choose comments CSV').setInputFiles({ name: 'first.csv', mimeType: 'text/csv', buffer: Buffer.from(header + '1,1,First,first@example.com,First body') }),
-    other.getByLabel('Choose comments CSV').setInputFiles({ name: 'second.csv', mimeType: 'text/csv', buffer: Buffer.from(header + '2,1,Second,second@example.com,Second body') }),
-  ]);
-  await Promise.all([expect(page.getByText('Upload complete')).toBeVisible(), expect(other.getByText('Upload complete')).toBeVisible()]);
-  await Promise.all([page, other].map(view => expect(view.getByRole('button', { name: 'Review conflict for comment 1' })).toBeVisible({ timeout: Math.max(1, 3000 - (Date.now() - started)) })));
-  expect(Date.now() - started).toBeLessThanOrEqual(3000);
-  for (const view of [page, other]) {
-    await view.getByRole('button', { name: 'Review conflict for comment 1' }).click();
-    await expect(view.getByRole('radio', { name: 'Pending alternative 1' })).toBeVisible();
-    await expect(view.getByRole('dialog')).toContainText('First body');
-    await expect(view.getByRole('dialog')).toContainText('Second body');
-  }
+  await page.getByRole('button', { name: 'Apply upload', exact: true }).click();
+  await expect(other.locator('.body-preview')).toHaveText('Second body', { timeout: Math.max(1, 3000 - (Date.now() - started)) });
   await other.close();
 });
 
 test('refreshes a draft outside the search results', async ({ page, request }) => {
   await request.post('/api/uploads', { headers: { 'x-upload-id': 'seed' }, data: header + '1,1,Original,user@example.com,Body' });
   await page.goto('/');
-  await page.getByRole('button', { name: 'Edit comment 1', exact: true }).click();
-  await page.getByLabel('Body', { exact: true }).fill('Kept draft');
+  await page.getByRole('button', { name: 'Edit record 1', exact: true }).click();
+  await page.getByLabel('body', { exact: true }).fill('Kept draft');
   await page.getByRole('searchbox').fill('no-match');
   await expect(page.getByText('Outside this page/search')).toBeVisible();
   await request.post('/api/comments/1/edit', { data: { expectedVersion: 1, postId: 1, name: 'Original', email: 'user@example.com', body: 'New accepted body' } });
-  await expect(page.getByRole('region', { name: 'Current accepted version', exact: true })).toContainText('New accepted body', { timeout: 3000 });
-  await expect(page.getByLabel('Body', { exact: true })).toHaveValue('Kept draft');
-  await expect(page.getByRole('button', { name: 'Save', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Review changes', exact: true })).toBeVisible({ timeout: 3000 });
+  await expect(page.getByLabel('body', { exact: true })).toHaveValue('Kept draft');
+  await expect(page.getByRole('button', { name: 'Save', exact: true })).toHaveAttribute('title', 'Resolve changes before saving');
 });
 
 // Hold the same fixture write barrier as the API suite until both browser requests arrive.
-async function race(first: Page, second: Page, action: string, endpoint: string) {
+async function race(first: Page, second: Page, action: string | RegExp, endpoint: string) {
   const pool = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
   const lock = await pool.connect();
   await lock.query('SELECT pg_advisory_lock(71422301)');
@@ -96,18 +91,18 @@ test('two browsers race inline saves and preserve the rejected draft without ret
   const views = [page, other];
   for (const view of views) {
     await view.goto('/');
-    await view.getByRole('button', { name: 'Edit comment 1', exact: true }).click();
-    await view.getByLabel('Body', { exact: true }).fill(view === page ? 'First draft' : 'Second draft');
+    await view.getByRole('button', { name: 'Edit record 1', exact: true }).click();
+    await view.getByLabel('body', { exact: true }).fill(view === page ? 'First draft' : 'Second draft');
   }
   const { responses, started } = await race(page, other, 'Save', '/api/comments/1/edit');
   expect(responses.map(response => response.status()).sort()).toEqual([200, 409]);
   const winnerIndex = responses.findIndex(response => response.status() === 200);
   const loser = views[1 - winnerIndex];
   const winnerBody = winnerIndex === 0 ? 'First draft' : 'Second draft';
-  await expect(loser.getByLabel('Body', { exact: true })).toHaveValue(winnerIndex === 0 ? 'Second draft' : 'First draft');
-  await expect(loser.getByRole('region', { name: 'Current accepted version', exact: true })).toContainText(winnerBody, { timeout: 3000 });
+  await expect(loser.getByLabel('body', { exact: true })).toHaveValue(winnerIndex === 0 ? 'Second draft' : 'First draft');
+  await expect(loser.getByRole('dialog', { name: 'Resolve edit conflict', exact: true })).toBeVisible({ timeout: 3000 });
   expect(Date.now() - started).toBeLessThanOrEqual(3000);
-  await expect(loser.getByRole('button', { name: 'Save', exact: true })).toBeDisabled();
+  await expect(loser.getByRole('dialog')).toContainText(winnerBody);
   expect((await (await request.get('/api/comments')).json()).comments[0].body).toBe(winnerBody);
   await other.close();
 });
@@ -119,15 +114,15 @@ test('two browsers race whole-version resolutions and refresh the losing review 
   const views = [page, other];
   for (const view of views) {
     await view.goto('/');
-    await view.getByRole('button', { name: 'Review conflict for comment 1' }).click();
-    await view.getByRole('radio', { name: view === page ? 'Accepted version' : 'Pending alternative 1', exact: true }).check();
+    await view.getByRole('button', { name: /^Review conflicts/ }).click();
+    await view.getByRole('radio', { name: view === page ? 'Current version' : 'Alternative 1', exact: true }).check();
   }
-  const { responses, started } = await race(page, other, 'Resolve conflict', '/api/comments/1/resolve');
+  const { responses, started } = await race(page, other, /^(Keep current version|Use alternative \d+|Use selected version)$/,  '/api/comments/1/resolve');
   expect(responses.map(response => response.status()).sort()).toEqual([200, 409]);
   const winnerIndex = responses.findIndex(response => response.status() === 200);
   const loser = views[1 - winnerIndex];
-  await expect(loser.getByRole('dialog')).toContainText('There are no pending alternatives. This conflict has already been resolved.', { timeout: 3000 });
-  await expect(loser.getByRole('button', { name: 'Resolve conflict', exact: true })).toBeDisabled();
+  await expect(loser.getByRole('dialog')).toContainText('Already resolved.', { timeout: 3000 });
+  await expect(loser.getByRole('button', { name: 'Done', exact: true })).toBeEnabled();
   await Promise.all(views.map(view => expect(view.locator('.body-preview')).toHaveText(winnerIndex === 0 ? 'Accepted body' : 'Alternative body', { timeout: Math.max(1, 3000 - (Date.now() - started)) })));
   expect(Date.now() - started).toBeLessThanOrEqual(3000);
   await loser.getByRole('button', { name: 'Cancel', exact: true }).click();

@@ -6,3 +6,4 @@ test-results/
 playwright-report/
 *.log
 .scratch/worktrees/
+.scratch/ui-review/

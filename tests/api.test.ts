@@ -78,6 +78,7 @@ test('searches the complete accepted dataset with literal case-insensitive text 
   assert.deepEqual(await ids('14'), [14]);
   const filtered = await list('?q=ordinary&page=999&pageSize=10');
   assert.equal(filtered.total, 31);
+  assert.equal(filtered.datasetTotal, 32);
   assert.equal(filtered.page, 4);
   assert.deepEqual(filtered.comments.map((row: any) => row.id), [31]);
   const first = await list('?q=ordinary&pageSize=25');
@@ -85,7 +86,7 @@ test('searches the complete accepted dataset with literal case-insensitive text 
   assert.equal(first.comments.length, 25);
   assert.equal(first.comments[0].id, 1);
   assert.equal(first.comments[24].id, 25);
-  assert.deepEqual(await list('?q=absent&page=999&pageSize=50'), { comments: [], total: 0, page: 1, pageSize: 50 });
+  assert.deepEqual(await list('?q=absent&page=999&pageSize=50'), { comments: [], total: 0, datasetTotal: 32, conflictIds: [], page: 1, pageSize: 50 });
 }));
 
 test('imports accepted comments and retains them after reconnecting the service', async () => {
@@ -117,7 +118,7 @@ test('imports accepted comments and retains them after reconnecting the service'
   }
 });
 
-async function withApi(run: (api: { eventsUrl: string; upload: (id: string, csv: string | Buffer) => Promise<Response>; list: (query?: string) => Promise<any>; pool: Pool; request: (path: string, body?: object) => Promise<Response> }) => Promise<void>) {
+async function withApi(run: (api: { eventsUrl: string; importFile: (id: string, csv: string) => Promise<Response>; upload: (id: string, csv: string | Buffer) => Promise<Response>; list: (query?: string) => Promise<any>; pool: Pool; request: (path: string, body?: object) => Promise<Response> }) => Promise<void>) {
   const pool = new Pool({ connectionString: databaseUrl });
   await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
   const app = await createApp(pool);
@@ -129,6 +130,7 @@ async function withApi(run: (api: { eventsUrl: string; upload: (id: string, csv:
       pool,
       eventsUrl: base.replace('http:', 'ws:') + '/api/events',
       request: (path, body) => fetch(`${base}${path}`, body ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : undefined),
+      importFile: (id, body) => fetch(`${base}/api/imports`, { method: 'POST', headers: { 'content-type': 'text/csv', 'x-upload-id': id }, body }),
       upload: (id, body) => fetch(`${base}/api/uploads`, { method: 'POST', headers: { 'content-type': 'text/csv', 'x-upload-id': id }, body: body as BodyInit }),
       list: async (query = '') => (await fetch(`${base}/api/comments${query}`)).json(),
     });
@@ -249,7 +251,7 @@ test('validates atomically, counts unchanged comments, retains omitted IDs, and 
   assert.deepEqual(await merged.json(), { status: 'completed', inserted: 1, unchanged: 1, conflicts: 0 });
   const changed = await upload('changed', header + '1,1,A,a@b.com,Changed\n1,4,D,d@b.com,Four');
   assert.equal(changed.status, 200);
-  assert.deepEqual(await changed.json(), { status: 'completed', inserted: 1, unchanged: 0, conflicts: 1 });
+  assert.deepEqual(await changed.json(), { status: 'completed', inserted: 1, unchanged: 0, conflicts: 1, conflictIds: [1] });
   const page = await list();
   assert.deepEqual(page.comments.map((row: any) => [row.id, row.body]), [[1, 'One'], [2, 'Two'], [3, 'Three'], [4, 'Four']]);
 }));
@@ -394,6 +396,165 @@ test('rolls back proposals and revisions when another record fails in the same u
   assert.equal(review.proposalRevision, 0);
   assert.deepEqual(review.alternatives, []);
   await pool.query('ALTER TABLE comments DROP CONSTRAINT injected_failure');
-  assert.deepEqual(await (await upload('failed-proposals', csv)).json(), { status: 'completed', inserted: 1, unchanged: 0, conflicts: 1 });
+  assert.deepEqual(await (await upload('failed-proposals', csv)).json(), { status: 'completed', inserted: 1, unchanged: 0, conflicts: 1, conflictIds: [1] });
   assert.equal((await (await request('/api/comments/1/review')).json()).alternatives.length, 1);
+}));
+
+
+test('stages a whole conflicting import and rejects it without changing accepted data or new rows', () => withApi(async ({ upload, importFile, list, request }) => {
+  await upload('seed', header + '1,1,A,a@example.com,Original');
+  const before = await list();
+  const csv = header + '2,1,Changed,a@example.com,Changed\n1,2,New,new@example.com,New body';
+  const result = await (await importFile('staged', csv)).json();
+  assert.equal(result.status, 'review_required');
+  assert.deepEqual(result.conflictIds, [1]);
+  assert.deepEqual(await list(), before);
+  assert.equal((await (await request('/api/imports/staged/reject', {})).json()).status, 'rejected_upload');
+  assert.deepEqual(await list(), before);
+  assert.equal((await (await request('/api/imports/staged/commit', { choices: [{ id: 1, selected: 0, expectedVersion: 1, expectedProposalRevision: 0 }] })).json()).status, 'rejected_upload');
+  assert.equal((await (await importFile('staged', csv)).json()).status, 'rejected_upload');
+  assert.deepEqual(await list(), before);
+}));
+
+test('represents an incoming version identical to a legacy alternative only once', () => withApi(async ({ upload, importFile, request, list }) => {
+  await upload('dedup-seed', header + '1,1,A,a@example.com,Original');
+  const csv = header + '1,1,A,a@example.com,Changed';
+  await upload('legacy-proposal', csv);
+  const staged = await (await importFile('matching-proposal', csv)).json();
+  const review = staged.reviews[1];
+  assert.equal(review.alternatives.length, 1);
+  assert.equal(review.alternatives[0].body, 'Changed');
+  assert.equal((await request('/api/imports/matching-proposal/commit', { choices: [{ id: 1, selected: review.alternatives[0].alternativeId, expectedVersion: 1, expectedProposalRevision: review.proposalRevision }] })).status, 200);
+  assert.equal((await list()).comments[0].body, 'Changed');
+  assert.equal((await (await request('/api/comments/1/review')).json()).alternatives.length, 0);
+}));
+
+test('requires every conflict choice and commits the entire import once', () => withApi(async ({ upload, importFile, list, request }) => {
+  await upload('seed', header + '1,1,A,a@example.com,One\n1,2,B,b@example.com,Two');
+  const before = await list();
+  await importFile('all', header + '2,1,Changed A,a@example.com,Changed one\n2,2,Changed B,b@example.com,Changed two\n1,3,C,c@example.com,Three');
+  const incomplete = await request('/api/imports/all/commit', { choices: [{ id: 1, selected: 0, expectedVersion: 1, expectedProposalRevision: 0 }] });
+  assert.equal(incomplete.status, 422);
+  assert.deepEqual(await list(), before);
+  const choice = { choices: [{ id: 1, selected: 0, expectedVersion: 1, expectedProposalRevision: 0 }, { id: 2, selected: 'accepted', expectedVersion: 1, expectedProposalRevision: 0 }] };
+  const committed = await (await request('/api/imports/all/commit', choice)).json();
+  assert.deepEqual(committed, { status: 'completed', inserted: 1, updated: 1, unchanged: 1, conflicts: 0 });
+  assert.deepEqual((await list()).comments.map((row: any) => [row.id, row.body]), [[1, 'Changed one'], [2, 'Two'], [3, 'Three']]);
+  assert.deepEqual(await (await request('/api/imports/all/commit', choice)).json(), committed);
+  assert.equal((await list()).comments[0].version, 2);
+}));
+
+test('rejects stale import choices while retaining later edits and keeping new rows staged', () => withApi(async ({ upload, importFile, request, list }) => {
+  await upload('seed', header + '1,1,A,a@example.com,Original');
+  await importFile('stale', header + '1,1,Imported,a@example.com,Imported\n1,2,New,n@example.com,New');
+  await request('/api/comments/1/edit', { expectedVersion: 1, postId: 1, name: 'Other user', email: 'a@example.com', body: 'Later edit' });
+  const response = await request('/api/imports/stale/commit', { choices: [{ id: 1, selected: 0, expectedVersion: 1, expectedProposalRevision: 0 }] });
+  assert.equal(response.status, 409);
+  const refreshed = await response.json();
+  assert.equal(refreshed.reviews[1].accepted.body, 'Later edit');
+  assert.equal((await list()).total, 1);
+  assert.equal((await list()).comments[0].body, 'Later edit');
+  assert.equal((await request('/api/imports/stale/commit', { choices: [{ id: 1, selected: 0, expectedVersion: 1, expectedProposalRevision: 0 }] })).status, 409);
+  assert.equal((await request('/api/imports/stale/commit', { choices: [{ id: 1, selected: 'accepted', expectedVersion: 2, expectedProposalRevision: 0 }] })).status, 200);
+  assert.equal((await list()).total, 2);
+  assert.equal((await list()).comments[0].body, 'Later edit');
+}));
+
+test('detects a concurrent insertion into an ID that was new at import review', () => withApi(async ({ upload, importFile, request, list }) => {
+  await upload('seed', header + '1,1,A,a@example.com,Original');
+  await importFile('collision', header + '1,1,A,a@example.com,Changed\n1,2,New,n@example.com,New');
+  await importFile('other-insert', header + '1,2,Other,o@example.com,Other');
+  const response = await request('/api/imports/collision/commit', { choices: [{ id: 1, selected: 0, expectedVersion: 1, expectedProposalRevision: 0 }] });
+  assert.equal(response.status, 409);
+  assert.deepEqual((await response.json()).conflictIds, [1, 2]);
+  assert.equal((await list()).comments[0].body, 'Original');
+  assert.equal((await list()).comments[1].body, 'Other');
+}));
+
+test('serializes competing import commits and rejection without partial application', () => withApi(async ({ pool, upload, importFile, request, list }) => {
+  await upload('seed', header + '1,1,A,a@example.com,Original');
+  const csv = header + '1,1,A,a@example.com,Changed\n1,2,B,b@example.com,New';
+  await importFile('race-commit', csv);
+  const choices = { choices: [{ id: 1, selected: 0, expectedVersion: 1, expectedProposalRevision: 0 }] };
+  const duplicates = await together(pool, () => request('/api/imports/race-commit/commit', choices), () => request('/api/imports/race-commit/commit', choices));
+  assert.deepEqual(await duplicates[0].json(), await duplicates[1].json());
+  assert.equal((await list()).comments[0].version, 2);
+  await importFile('race-reject', header + '1,1,A,a@example.com,Last\n1,3,C,c@example.com,Third');
+  const results = await together(pool, () => request('/api/imports/race-reject/commit', { choices: [{ id: 1, selected: 0, expectedVersion: 2, expectedProposalRevision: 0 }] }), () => request('/api/imports/race-reject/reject', {}));
+  const outcomes = await Promise.all(results.map(result => result.json()));
+  assert.equal(outcomes[0].status, outcomes[1].status);
+  const data = await list();
+  if (outcomes[0].status === 'completed') { assert.equal(data.total, 3); assert.equal(data.comments[0].body, 'Last'); }
+  else { assert.equal(data.total, 2); assert.equal(data.comments[0].body, 'Changed'); }
+}));
+
+test('rolls back every import choice and insertion on a database failure and permits retry', () => withApi(async ({ pool, upload, importFile, request, list }) => {
+  await upload('seed', header + '1,1,A,a@example.com,Original');
+  await importFile('rollback-import', header + '1,1,A,a@example.com,Changed\n1,99,B,b@example.com,New');
+  await pool.query('ALTER TABLE comments ADD CONSTRAINT atomic_failure CHECK (id <> 99)');
+  const choices = { choices: [{ id: 1, selected: 0, expectedVersion: 1, expectedProposalRevision: 0 }] };
+  assert.equal((await request('/api/imports/rollback-import/commit', choices)).status, 503);
+  assert.equal((await list()).comments[0].body, 'Original');
+  assert.equal((await list()).total, 1);
+  await pool.query('ALTER TABLE comments DROP CONSTRAINT atomic_failure');
+  assert.equal((await request('/api/imports/rollback-import/commit', choices)).status, 200);
+  assert.equal((await list()).total, 2);
+  assert.equal((await list()).comments[0].body, 'Changed');
+}));
+
+test('rejects forged or duplicated choices and reusing an import ID for changed content', () => withApi(async ({ upload, importFile, request, list }) => {
+  await upload('seed', header + '1,1,A,a@example.com,Original');
+  const csv = header + '1,1,A,a@example.com,Changed';
+  await importFile('choices', csv);
+  for (const choices of [[{ id: 1, selected: 999 }], [{ id: 2, selected: 0, expectedVersion: 1, expectedProposalRevision: 0 }], [{ id: 1, selected: 0, expectedVersion: 1, expectedProposalRevision: 0 }, { id: 1, selected: 0, expectedVersion: 1, expectedProposalRevision: 0 }]]) assert.equal((await request('/api/imports/choices/commit', { choices })).status, 422);
+  assert.equal((await importFile('choices', header + '1,1,A,a@example.com,Another')).status, 409);
+  assert.equal((await list()).comments[0].body, 'Original');
+}));
+
+
+test('sync heartbeats recover committed revision and unchanged active-cell presence', () => withApi(async ({ eventsUrl, upload, importFile, request }) => {
+  await upload('sync-seed', header + '1,1,A,a@example.com,Original');
+  const socket = new WebSocket(eventsUrl);
+  await new Promise<void>(resolve => socket.once('open', resolve));
+  const sync = (cell: null | { commentId: number; field: string }) => new Promise<any>((resolve, reject) => {
+    const timer = setTimeout(() => { socket.off('message', receive); reject(new Error('Missing sync acknowledgment')); }, 3000);
+    function receive(raw: any) {
+      const message = JSON.parse(raw.toString());
+      if (message.type === 'sync') { clearTimeout(timer); socket.off('message', receive); resolve(message); }
+    }
+    socket.on('message', receive);
+    socket.send(JSON.stringify({ type: 'presence', cell }));
+  });
+  try {
+    const first = await sync({ commentId: 1, field: 'body' });
+    const again = await sync({ commentId: 1, field: 'body' });
+    assert.equal(again.revision, first.revision);
+    assert.deepEqual(again.sessions, first.sessions);
+    await importFile('sync-draft', header + '1,1,A,a@example.com,Changed');
+    assert.equal((await sync(null)).revision, first.revision);
+    await request('/api/imports/sync-draft/reject', {});
+    assert.equal((await sync(null)).revision, first.revision);
+    await importFile('sync-apply', header + '1,1,A,a@example.com,Changed');
+    await request('/api/imports/sync-apply/commit', { choices: [{ id: 1, selected: 0, expectedVersion: 1, expectedProposalRevision: 0 }] });
+    assert.notEqual((await sync(null)).revision, first.revision);
+  } finally { socket.terminate(); }
+}));
+
+
+test('refreshes a staged import without accepted writes and guards outdated choices', () => withApi(async ({ upload, importFile, request, list }) => {
+  await upload('refresh-seed', header + '1,1,A,a@example.com,Original');
+  await importFile('live-preview', header + '1,1,A,a@example.com,Imported\n1,2,B,b@example.com,New');
+  await request('/api/comments/1/edit', { expectedVersion: 1, postId: 1, name: 'A', email: 'a@example.com', body: 'Later' });
+  const before = await list();
+  const refreshed = await (await request('/api/imports/live-preview/refresh', {})).json();
+  assert.equal(refreshed.reviews[1].accepted.body, 'Later');
+  assert.deepEqual(await list(), before);
+  assert.equal((await request('/api/imports/live-preview/commit', { choices: [{ id: 1, selected: 0, expectedVersion: 1, expectedProposalRevision: 0 }] })).status, 409);
+  await request('/api/comments/1/edit', { expectedVersion: 2, postId: 1, name: 'A', email: 'a@example.com', body: 'Imported' });
+  const ready = await (await request('/api/imports/live-preview/refresh', {})).json();
+  assert.deepEqual(ready.conflictIds, []);
+  assert.equal((await list()).total, 1);
+  assert.equal((await request('/api/imports/live-preview/commit', { choices: [] })).status, 200);
+  assert.equal((await list()).total, 2);
+  assert.equal((await list()).comments[0].version, 3);
 }));

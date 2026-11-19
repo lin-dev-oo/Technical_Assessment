@@ -1,4 +1,5 @@
 import express from 'express';
+import { attachImports } from './imports.js';
 import type { Pool, PoolClient } from 'pg';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -47,6 +48,7 @@ export async function createApp(pool: Pool) {
   )`);
   await pool.query('CREATE INDEX IF NOT EXISTS alternatives_comment_id ON alternatives(comment_id)');
   const app = express();
+  app.use('/api', (_req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
   app.get('/api/health', async (_req, res) => { await pool.query('SELECT 1'); res.json({ status: 'ok' }); });
   app.get('/api/sample', (_req, res) => res.download(path.resolve('data.csv')));
   app.get('/api/comments', async (req, res) => {
@@ -64,10 +66,12 @@ export async function createApp(pool: Pool) {
     try {
       await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
       const { rows: [{ total }] } = await client.query(`SELECT count(*)::integer AS total FROM comments ${filter}`, [query, numericId]);
+      const datasetTotal = query ? (await client.query('SELECT count(*)::integer AS total FROM comments')).rows[0].total : total;
+      const conflictIds = (await client.query('SELECT DISTINCT comment_id FROM alternatives ORDER BY comment_id')).rows.map(row => row.comment_id as number);
       const page = Math.min(requestedPage, Math.max(1, Math.ceil(total / pageSize)));
       const { rows: comments } = await client.query(`SELECT id, "postId", name, email, body, version, proposal_revision AS "proposalRevision", (SELECT count(*)::integer FROM alternatives WHERE comment_id = comments.id) AS "pendingCount" FROM comments ${filter} ORDER BY id LIMIT $3 OFFSET $4`, [query, numericId, pageSize, (page - 1) * pageSize]);
       await client.query('COMMIT');
-      res.json({ comments, total, page, pageSize });
+      res.json({ comments, total, datasetTotal, conflictIds, page, pageSize });
     } catch (error) { await client.query('ROLLBACK'); throw error; }
     finally { client.release(); }
   });
@@ -126,19 +130,19 @@ export async function createApp(pool: Pool) {
       await client.query(`INSERT INTO comments (id, "postId", name, email, body, upload_label, session_label)
         SELECT id, "postId", name, email, body, $2, $3 FROM json_to_recordset($1::json)
         AS incoming(id integer, "postId" integer, name text, email text, body text)`, [JSON.stringify(incoming), fileLabel, sessionLabel]);
-      await finish(200, { status: 'completed', inserted: incoming.length, unchanged: parsed.comments.length - incoming.length - changed.length, conflicts: changed.length }, [...changedIds, ...incoming.map(comment => comment.id)]);
+      await finish(200, { status: 'completed', inserted: incoming.length, unchanged: parsed.comments.length - incoming.length - changed.length, conflicts: changed.length, ...(changed.length ? { conflictIds: changed.map(comment => comment.id) } : {}) }, [...changedIds, ...incoming.map(comment => comment.id)]);
     } catch (error) { await client.query('ROLLBACK'); throw error; }
     finally { client.release(); }
   });
   app.get('/api/comments/:id/review', async (req, res) => {
     const id = commentId(req.params.id);
-    if (!id) { res.status(400).json({ status: 'invalid_request', message: 'Supply a valid comment ID.' }); return; }
+    if (!id) { res.status(400).json({ status: 'invalid_request', message: 'Supply a valid record ID.' }); return; }
     const client = await pool.connect();
     try {
       await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
       const review = await readReview(client, id);
       await client.query('COMMIT');
-      if (!review) res.status(404).json({ status: 'not_found', message: 'Comment not found.' });
+      if (!review) res.status(404).json({ status: 'not_found', message: 'Record not found.' });
       else res.json(review);
     } catch (error) { await client.query('ROLLBACK'); throw error; }
     finally { client.release(); }
@@ -147,18 +151,18 @@ export async function createApp(pool: Pool) {
     const id = commentId(req.params.id);
     const { expectedVersion, postId, name, email, body } = req.body ?? {};
     if (!id || !Number.isSafeInteger(expectedVersion) || expectedVersion < 1) {
-      res.status(400).json({ status: 'invalid_request', message: 'Supply a comment ID and its accepted version.' }); return;
+      res.status(400).json({ status: 'invalid_request', message: 'Supply a record ID and its accepted version.' }); return;
     }
     const errors = validateFields({ id, postId, name, email, body });
     if (typeof postId !== 'number' && !errors.some(error => error.field === 'postId')) errors.push({ field: 'postId', message: 'Use a positive whole number.' });
-    if (Object.hasOwn(req.body, 'id')) errors.push({ field: 'id', message: 'Comment IDs cannot be changed.' });
+    if (Object.hasOwn(req.body, 'id')) errors.push({ field: 'id', message: 'Record IDs cannot be changed.' });
     if (errors.length) { res.status(422).json({ status: 'rejected', errors }); return; }
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
       await client.query('SELECT pg_advisory_xact_lock(71422301)');
       const review = await readReview(client, id);
-      if (!review) { await client.query('COMMIT'); res.status(404).json({ status: 'not_found', message: 'Comment not found.' }); return; }
+      if (!review) { await client.query('COMMIT'); res.status(404).json({ status: 'not_found', message: 'Record not found.' }); return; }
       if (review.alternatives.length || review.accepted.version !== expectedVersion) {
         await client.query('COMMIT'); res.status(409).json({ status: review.alternatives.length ? 'conflicted_edit' : 'stale_edit', review }); return;
       }
@@ -183,7 +187,7 @@ export async function createApp(pool: Pool) {
       await client.query('BEGIN');
       await client.query('SELECT pg_advisory_xact_lock(71422301)');
       const review = await readReview(client, id);
-      if (!review) { await client.query('COMMIT'); res.status(404).json({ status: 'not_found', message: 'Comment not found.' }); return; }
+      if (!review) { await client.query('COMMIT'); res.status(404).json({ status: 'not_found', message: 'Record not found.' }); return; }
       if (review.accepted.version !== expectedVersion || review.proposalRevision !== expectedProposalRevision || !review.alternatives.length) {
         await client.query('COMMIT'); res.status(409).json({ status: 'stale_review', review }); return;
       }
@@ -202,6 +206,7 @@ export async function createApp(pool: Pool) {
     } catch (error) { await client.query('ROLLBACK'); throw error; }
     finally { client.release(); }
   });
+  await attachImports(app, pool);
   app.use(express.static(path.resolve('dist')));
   app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
     console.error(error);

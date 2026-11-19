@@ -17,7 +17,7 @@ test('rejects files over 5 MB and over 10,000 comments before returning accepted
   const tooLarge = parseUpload(Buffer.alloc(5 * 1024 * 1024 + 1, 'a'));
   assert.deepEqual(tooLarge, { ok: false, errors: [{ message: 'The file exceeds the 5 MB upload limit.' }] });
   const tooMany = parseUpload(Buffer.from('postId,id,name,email,body\n' + Array.from({ length: 10001 }, (_, i) => `1,${i + 1},A,a@b.com,B`).join('\n')));
-  assert.deepEqual(tooMany, { ok: false, errors: [{ message: 'The file exceeds the 10,000 comment limit.' }] });
+  assert.deepEqual(tooMany, { ok: false, errors: [{ message: 'The file exceeds the 10,000 record limit.' }] });
 });
 
 test('rejects incompatible files and reports all safely discoverable record and field problems', () => {
